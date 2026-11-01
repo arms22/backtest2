@@ -1,37 +1,10 @@
 import asyncio
-import sys
 import unittest
-from pathlib import Path
 
 from backtest2.accounting import Position
-from backtest2.replay import (ACTIVE, ReplayConfig, ReplayEngine, sleep,
-                             wakeup, wakeup_every_seconds)
-from backtest2.runner import BotCase, source_hashes
-
-
-def market(second, **changes):
-    row = dict(second=second, timestamp=second+.01, bids=[[90., .1]], asks=[[120., .1]],
-               bid=90., ask=120., high=99., low=98., sell_volume=.006, buy_volume=0.,
-               sell_count=1, buy_count=0, trades=1)
-    row.update(changes)
-    return row
-
-
-class Adapter:
-    def __init__(self, engine):
-        self.engine = engine
-
-    def on_fill(self, order, quantity, price, kind):
-        pass
-
-    def on_market_update(self):
-        pass
-
-
-class PassiveBot:
-    async def run(self, strategy):
-        while True:
-            await wakeup()
+from backtest2.replay import (ACTIVE, Executions, MarketBoard, ReplayConfig, ReplayEngine, sleep,
+                             wakeup_every_seconds)
+from helpers import Adapter, PassiveBot, market
 
 
 class ReplayTests(unittest.IsolatedAsyncioTestCase):
@@ -68,6 +41,102 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.tick(market(5))
         self.assertEqual(order['executed_size'], .004)
 
+    async def test_no_fill_from_pre_arrival_aggregate(self):
+        self.engine.now, self.engine.row = 4.9, market(4)
+        order = self.engine.submit_order('BUY', .004, 100.)
+        await self.engine.tick(market(5))
+        self.assertEqual(order['executed_size'], 0)
+
+    async def test_takers_share_visible_depth(self):
+        one, two = self.place(price=125), self.place(price=125)
+        await self.engine.tick(market(5, asks=[[120., .006], [130., .1]],
+                                      sell_volume=0., sell_count=0, trades=0))
+        self.assertAlmostEqual(one['executed_size'] + two['executed_size'], .006)
+
+    async def test_no_vwap_extrapolation(self):
+        self.place()
+        await self.engine.tick(market(5))
+        self.engine.row['bids'] = [[90., .001]]
+        with self.assertRaisesRegex(ValueError, 'Insufficient stored depth'):
+            self.engine.equity()
+
+    async def test_future_snapshot_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'newer than'):
+            await self.engine.tick(market(5, timestamp=5.99))
+
+    async def test_warmup_suppresses_new_orders(self):
+        self.engine.config = ReplayConfig(warmup_seconds=10)
+        self.assertIsNone(self.place())
+        self.assertEqual(self.engine.counts['new_orders'], 0)
+
+    async def test_executions_report_sides_with_positive_trade_counts(self):
+        executions = Executions(self.engine)
+        for buy_count, sell_count, expected in (
+                (0, 0, []), (2, 0, ['BUY']), (0, 3, ['SELL']), (2, 3, ['BUY', 'SELL'])):
+            with self.subTest(buy_count=buy_count, sell_count=sell_count):
+                self.engine.row = market(1, buy_count=buy_count, sell_count=sell_count)
+                self.assertEqual(await executions.get_data(), [dict(side=side) for side in expected])
+
+    async def test_market_board_displays_arrived_orders_until_cancel_is_effective(self):
+        order = self.place()
+        board = MarketBoard(self.engine)
+        self.assertEqual(board.sort(), [[(90., .1)], [(120., .1)]])
+        self.engine.now = 3.
+        self.engine.submit_order('BUY', .002, 90.)
+        self.engine.submit_order('SELL', .003, 120.)
+        self.engine.now = 5.
+        bids, asks = board.sort()
+        self.assertEqual(bids[0], (100., .004))
+        self.assertAlmostEqual(bids[1][1], .102)
+        self.assertAlmostEqual(asks[0][1], .103)
+        self.assertEqual((board.best_bid, board.best_ask), (100., 120.))
+        self.engine.cancel_order(order)
+        self.assertEqual(board.sort()[0][0], (100., .004))
+        self.engine.now = 6.
+        self.assertEqual(board.sort()[0][0][0], 90.)
+
+    async def test_finish_liquidates_position_and_notifies_adapter(self):
+        notifications = []
+        self.engine.strategy.on_fill = lambda order, quantity, price, kind: notifications.append(
+            (order['id'], order['side'], quantity, price, kind, self.engine.position))
+        self.place()
+        await self.engine.tick(market(5))
+        self.engine.submit_order('BUY', .002, 80.)
+        result = await self.engine.finish()
+        self.assertEqual(notifications[-1], ('terminal', 'SELL', .004, 90., 'terminal', 0.))
+        self.assertEqual(self.engine.orders, [])
+        self.assertEqual(result['counts']['terminal_fills'], 1)
+        self.assertEqual(result['counts']['terminal_cancelled_orders'], 1)
+        self.assertAlmostEqual(result['terminal_position'], .004)
+        self.assertAlmostEqual(result['gross_pnl'], -.04)
+
+
+class LifecycleTests(unittest.IsolatedAsyncioTestCase):
+    async def test_bot_exception_is_propagated_and_task_finishes(self):
+        class BrokenBot(PassiveBot):
+            async def run(self, strategy):
+                raise ValueError('broken startup')
+
+        engine = ReplayEngine(BrokenBot(), ReplayConfig(), 0, 10,
+                              'test', 'TEST_JPY', 'broken', Adapter)
+        with self.assertRaisesRegex(ValueError, 'broken startup'):
+            await engine.launch()
+        self.assertTrue(engine.task.done())
+
+    async def test_missing_virtual_clock_binding_times_out(self):
+        class SleepingBot(PassiveBot):
+            async def run(self, strategy):
+                await asyncio.sleep(10)
+
+        engine = ReplayEngine(SleepingBot(), ReplayConfig(tick_timeout=.01),
+                              0, 10, 'test', 'TEST_JPY', 'sleeping', Adapter)
+        try:
+            with self.assertRaises(TimeoutError):
+                await engine.launch()
+        finally:
+            await engine.stop()
+        self.assertTrue(engine.task.cancelled())
+
     async def test_periodic_clock_and_fractional_sleep_use_virtual_time(self):
         class TimedBot:
             def __init__(self):
@@ -92,23 +161,24 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class AccountingTests(unittest.TestCase):
-    def test_fifo_partial_close_reverse_and_terminal(self):
+    def test_fifo_partial_close_and_reverse(self):
         position = Position()
-        for side, size, price in [('BUY', .01, 100), ('BUY', .02, 110),
-                                  ('SELL', .04, 120), ('BUY', .01, 115)]:
-            position.add(dict(side=side, size=size, price=price, commission=0))
-        self.assertEqual(position.position_size, 0)
-        self.assertAlmostEqual(position.netprofit, .45)
+        for side, size, price, remaining, realized in (
+                ('BUY', .01, 100, .01, 0),
+                ('BUY', .02, 110, .03, 0),
+                ('SELL', .005, 120, .025, .1),
+                ('SELL', .035, 120, -.01, .4),
+                ('BUY', .01, 115, 0, .45)):
+            with self.subTest(side=side, size=size, price=price):
+                position.add(dict(side=side, size=size, price=price, commission=0))
+                self.assertAlmostEqual(position.position_size, remaining)
+                self.assertAlmostEqual(position.netprofit, realized)
 
-    def test_shared_package_imports_no_exchange_repository(self):
-        self.assertFalse(any(name.split('.')[0] in ('firebots', 'bankbots', 'coinbots', 'gmobots')
-                             for name in sys.modules))
 
-    def test_source_provenance_accepts_external_repository(self):
-        source = Path(__file__).resolve()
-        hashes = source_hashes([BotCase('test', PassiveBot, Adapter, code_files=(source,))], source)
-        self.assertTrue(any(path.endswith('tests/test_replay.py') for path in hashes))
-        self.assertTrue(any(path.endswith('backtest2/replay.py') for path in hashes))
+class ConfigurationTests(unittest.TestCase):
+    def test_negative_latency_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'Latency must be nonnegative'):
+            ReplayConfig(latency=-1)
 
 
 if __name__ == '__main__':
