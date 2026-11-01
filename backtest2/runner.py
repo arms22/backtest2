@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import shutil
 from contextlib import ExitStack, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -54,8 +55,25 @@ def markouts(fills, midpoints):
     return result
 
 
+def prepare_output(output, overwrite=False, protected_paths=()):
+    """Replace an explicitly selected result directory, protecting inputs and sources."""
+    output = Path(output)
+    if output.exists() and not overwrite:
+        raise FileExistsError(f'Output directory already exists: {output}. '
+                              'Use --overwrite to replace it, or choose another --output.')
+    if overwrite and output.exists():
+        target = output.resolve()
+        if output.is_symlink() or (hasattr(output, 'is_junction') and output.is_junction()):
+            raise ValueError('Cannot overwrite a linked output directory')
+        if target == Path(target.anchor) or any(Path(p).resolve().is_relative_to(target)
+                                                for p in protected_paths):
+            raise ValueError('Output directory contains input data, working directory or source files')
+        shutil.rmtree(target)
+    output.mkdir(parents=True, exist_ok=False)
+
+
 async def run_backtest(data, output, cases, configs, experiment_file, start=None, end=None,
-                       split_at=(), progress=print):
+                       split_at=(), progress=print, overwrite=False):
     """Fresh bot/inventory per segment; behavior and parameters come from each case."""
     data, output = Path(data), Path(output)
     manifest = load_market_manifest(data)
@@ -75,7 +93,9 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     if len(set(config_names)) != len(config_names):
         raise ValueError('Configurations need distinct model/latency labels; run other sensitivities separately')
     hashes = source_hashes(cases, experiment_file)
-    output.mkdir(parents=True, exist_ok=False)
+    protected = [data, Path.cwd(), Path(__file__).parent, experiment_file]
+    protected.extend(p for case in cases for p in case.code_files)
+    prepare_output(output, overwrite, protected)
     boundaries = [start, *split_at, end]
     results, engines, midpoints, segment_index = [], [], {}, -1
 

@@ -13,7 +13,9 @@ def main():
     parser.add_argument('--experiment', required=True, help='Module exposing build_cases(), e.g. backtests.cfdmm')
     parser.add_argument('--case', action='append', help='Case name; repeat to select multiple cases')
     parser.add_argument('--data', type=Path, required=True, help='Saved market-data directory with manifest')
-    parser.add_argument('--output', type=Path, required=True, help='New output directory; never overwrite')
+    parser.add_argument('--output', type=Path, required=True, help='Output directory')
+    parser.add_argument('--overwrite', action='store_true',
+                        help='Delete the existing output directory before replaying')
     parser.add_argument('--start', help='Inclusive ISO timestamp with timezone')
     parser.add_argument('--end', help='Exclusive ISO timestamp with timezone')
     parser.add_argument('--split-at', action='append', default=[], help='Restart bot/inventory at this ISO timestamp')
@@ -36,7 +38,7 @@ def main():
     result = asyncio.run(run_backtest(args.data, args.output, cases, configs, module.__file__,
                                       parse_time(args.start) if args.start else None,
                                       parse_time(args.end) if args.end else None,
-                                      [parse_time(t) for t in args.split_at]))
+                                      [parse_time(t) for t in args.split_at], overwrite=args.overwrite))
     print(f'Saved {len(result["results"])} results to {args.output}')
 
 
