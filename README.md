@@ -21,7 +21,6 @@
 各ボットのリポジトリから、隣接するこのディレクトリをローカル依存として参照する。firebotsとbankbotsには任意の `backtest` extraを設定している。通常の実行環境に追加する場合は、各リポジトリのルートで実行する。
 
 ```powershell
-$env:UV_CACHE_DIR = Join-Path $PWD '.uv-cache'
 uv sync --extra backtest
 uv run --extra backtest python -m backtest2 --help
 ```
@@ -52,8 +51,9 @@ uv run --extra backtest python -m backtest2.audit --data <保存データ> --res
 
 このリポジトリのルートで実行する。テストは模擬データだけを使う。
 
+uvのキャッシュ先は `pyproject.toml` の `[tool.uv]` で `.cache/uv` に設定しているため、`UV_CACHE_DIR` の指定は不要。`PYTHONPYCACHEPREFIX` は指定せず、Python標準の `__pycache__/` を使う。キャッシュは `.gitignore` で除外する。
+
 ```powershell
-$env:UV_CACHE_DIR = Join-Path $PWD '.uv-cache'
 uv run python -m unittest discover -s tests -v
 uv run python -m compileall -q backtest2
 ```
