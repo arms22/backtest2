@@ -1,0 +1,14 @@
+[build-system]
+requires = ["hatchling>=1.33,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "backtest2"
+version = "0.1.0"
+description = "Offline single-product market replay for trading bots"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+cache-dir = ".uv-cache"
