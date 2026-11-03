@@ -26,6 +26,24 @@ def file_hash(path):
     return digest.hexdigest()
 
 
+def get_interval_seconds(directory, manifest, data_file='market_rows.jsonl.gz'):
+    """Read the first two timestamps to infer a fixed whole-second interval."""
+    with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
+        try:
+            first = json.loads(next(source))
+            second = json.loads(next(source))
+        except StopIteration:
+            raise ValueError('At least two market rows are needed to infer the interval') from None
+    first_time = datetime.fromisoformat(first['time'].replace('Z', '+00:00'))
+    second_time = datetime.fromisoformat(second['time'].replace('Z', '+00:00'))
+    if first_time.tzinfo is None or second_time.tzinfo is None:
+        raise ValueError('Market record has no timezone')
+    interval = math.floor(second_time.timestamp()) - math.floor(first_time.timestamp())
+    if interval < 1:
+        raise ValueError('Backtest requires fixed whole-second OHLCV intervals')
+    return interval
+
+
 def load_market_manifest(directory, data_file='market_rows.jsonl.gz', manifest_file='fetch_manifest.json'):
     directory = Path(directory)
     manifest = json.loads((directory/manifest_file).read_text(encoding='utf-8'))
@@ -41,7 +59,8 @@ def load_market_manifest(directory, data_file='market_rows.jsonl.gz', manifest_f
     if parse_time(manifest['end_utc_exclusive']) <= parse_time(manifest['start_utc']):
         raise ValueError('Invalid market-data period')
     # Normalize in memory for runner/plot consumers; never rewrite the source manifest.
-    return dict(manifest, raw_sha256=expected_hash)
+    return dict(manifest, raw_sha256=expected_hash,
+                interval_seconds=get_interval_seconds(directory, manifest, data_file))
 
 
 def validate_market_row(row):
@@ -74,25 +93,21 @@ def validate_market_row(row):
     return bids, asks
 
 
-def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
-    previous = start - 1
+def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz', interval_seconds=1):
+    """Decode stored market data without row-level validation."""
     with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
         for line in source:
             row = json.loads(line)
             stamp = datetime.fromisoformat(row['time'].replace('Z', '+00:00'))
-            if stamp.tzinfo is None:
-                raise ValueError('Market record has no timezone')
             timestamp = stamp.timestamp()
             second = math.floor(timestamp)
             if second < start:
                 continue
             if second >= end:
                 break
-            if second != previous + 1:
-                raise ValueError('Missing, duplicate or unordered market seconds')
-            row['bids'], row['asks'] = validate_market_row(row)
+            # Replay consumes the stored values like the bot consumes exchange
+            # data; only decode the book fields needed by the strategy/model.
+            row['bids'] = json.loads(row['bids_raw'])
+            row['asks'] = json.loads(row['asks_raw'])
             row['timestamp'], row['second'] = timestamp, second
-            previous = second
             yield row
-    if previous != end - 1:
-        raise ValueError('Incomplete market-data period')

@@ -13,7 +13,7 @@ from .data import iter_market_rows, load_market_manifest, parse_time
 
 
 def load_pnl_series(data, results, cases=(), models=()):
-    """Reconstruct one-second liquidation MTM, summing independent segments."""
+    """Reconstruct bar-interval liquidation MTM, summing independent segments."""
     data, results = Path(data), Path(results)
     bundle = json.loads((results/'results.json').read_text(encoding='utf-8'))
     data_file = bundle.get('input_data_file', 'market_rows.jsonl.gz')
@@ -36,7 +36,8 @@ def load_pnl_series(data, results, cases=(), models=()):
             fills = [json.loads(line) for line in source]
         states[segment, name] = dict(result=result, fills=fills, cursor=0, cash=0., sats=0)
 
-    for row in iter_market_rows(data, start, end, data_file):
+    interval_seconds = manifest['interval_seconds']
+    for row in iter_market_rows(data, start, end, data_file, interval_seconds):
         index = bisect.bisect_right(boundaries, row['second'])
         segment = f'segment_{index:03}'
         for name, curve in curves.items():
@@ -54,7 +55,7 @@ def load_pnl_series(data, results, cases=(), models=()):
                                                        abs(quantity))
             curve['times'].append(row['timestamp'])
             curve['values'].append(curve['offset'] + equity)
-            if row['second'] + 1 == boundaries[index]:
+            if row['second'] + interval_seconds == boundaries[index]:
                 expected = state['result']['gross_pnl']
                 if (state['cursor'] != len(fills) or state['sats'] != 0
                         or not math.isclose(equity, expected, abs_tol=1e-5)):
@@ -104,7 +105,7 @@ def plot_pnl(data, results, output=None, cases=(), models=(), utc_offset=0):
                 ax.grid(True, alpha=.18)
                 ax.spines[['top', 'right']].set_visible(False)
                 ax.legend(loc='upper left', bbox_to_anchor=(1.01, 1), frameon=False, fontsize=8)
-            note = '1-second liquidation MTM; independent segments summed; costs as recorded'
+            note = f"{bundle['input_manifest'].get('interval_seconds', 1)}-second bar liquidation MTM; independent segments summed; costs as recorded"
             axes[-1, 0].set_xlabel(f"Time ({zone.tzname(None)})\n{note}")
             output.parent.mkdir(parents=True, exist_ok=True)
             fig.savefig(output, dpi=150)

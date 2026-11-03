@@ -26,17 +26,17 @@ uv sync --extra backtest
 uv run --extra backtest python -m backtest2 --help
 ```
 
-`--experiment` で指定したモジュールの `build_cases()` から `BotCase` のリストを受け取る。必須項目は `name`、`create_bot`、`strategy_factory`。接続先はエンジンから生成し、通常のボットへStrategyとして渡す。時計の差替えと参照ソースは、ケースの `clock_context` と `code_files` で指定する。
+`--experiment` で指定したモジュールの `build_cases()` から `BotCase` のリストを受け取る。必須項目は `name`、`create_bot`、`strategy_factory`。接続先はエンジンから生成し、通常のボットへStrategyとして渡す。時計の差替えと参照ソースは、ケースの `clock_context` と `code_files` で指定する。`asyncio_modules=(bot_module, strategy_module)` を指定すると、共通ランナーが再生中だけ各モジュールの `asyncio` 参照を差し替え、`gather` を逐次実行する。指定しないケースは通常の並列実行となる。共有の `asyncio` 自体は変更せず、再生終了時には参照を元に戻す。対象は `import asyncio` 形式の参照であり、`from asyncio import gather` には適用されない。
 
 接続先が実装する通知は `on_fill(order, quantity, price, kind)` と `on_market_update()` の2つ。前者は共通台帳の更新後、後者は各秒の約定・取消処理の完了後に呼ぶ。接続先は本番形式の注文情報・残高へ反映する。新規・取消はエンジンの `submit_order()`・`cancel_order()` を使用する。対応例は `../firebots/firebots/backtest.py` と `../bankbots/bankbots/backtest.py`。
 
-入力は `fetch_manifest.json` と `market_rows.jsonl.gz`。1商品・連続した1秒ごとの板、OHLC、売買方向別数量・件数を使用する。既存のfirebots用保存形式を引き継いでいる。別の取引所のデータは商品名・取得条件とともに同形式へ書き出す。取得処理はこのライブラリに含めない。
+入力は `fetch_manifest.json` と `market_rows.jsonl.gz`。1商品・一定間隔の板、OHLC、売買方向別数量・件数を使用する。間隔はデータ行の先頭2行の時刻を秒単位に切り下げ、その差から求める。manifestの `interval_seconds` は間隔の判定には使用しない。1秒、5秒、1分、1時間などの整数秒間隔に対応し、期間と分割境界はその間隔にそろえる。既存のfirebots用保存形式を引き継いでいる。取得処理はこのライブラリに含めない。
 
 ファイル名を変える場合は `--data-file quotes.jsonl.gz --manifest-file source.json` を指定する。パスは `--data` からの相対パス、または絶対パスで指定できる。Python APIでは `run_backtest(..., data_file=..., manifest_file=...)` を使う。指定したパスを結果に保存するため、監査と描画も同じファイルを読む。相対パスを使えば、データディレクトリ全体を移動しても参照を維持できる。
 
 共通エンジンは商品・ペアの識別子を扱わず、manifestの `product` や行の `product_code` を要求・参照しない。識別子はボット側のケース定義で `strategy_factory` に渡し、取引所アダプターが管理する。入力はあらかじめ単一商品へ絞り込む。
 
-データのSHA256はmanifestの `raw_sha256` を使い、未指定またはnullの場合は `output.sha256` を使う。InfluxDB Fetcherの時間範囲モードによる出力は、必要な市場データ列がそろっていれば `--data-file query_results.jsonl.gz` で直接読める。`missing_intervals_utc_seconds` と `invalid_rows` は省略できる。値が記録されていれば異常の有無を確認し、項目の有無にかかわらず再生中に連続秒・板・OHLC・約定集計を検査する。元のmanifestは書き換えない。複数ファイルの結合には対応していない。
+データのSHA256はmanifestの `raw_sha256` を使い、未指定またはnullの場合は `output.sha256` を使う。`missing_intervals_utc_seconds` と `invalid_rows` は省略できる。manifestに欠損区間や不正行が記録されていれば入力を拒否する。再生中は必要な板データをJSONから展開する。各行の欠落・重複・時刻順序や末尾不足、板・OHLC・約定集計の値域や相互整合は検査しない。元のmanifestは書き換えない。
 
 ソースの記録はパッケージ内のPythonファイル、実験ファイル、`code_files` が対象。ハッシュのキーは全参照ファイルの共通祖先からの相対パスであり、複数リポジトリを参照できる。参照ソースはケース側で明示する。
 
@@ -44,13 +44,13 @@ uv run --extra backtest python -m backtest2 --help
 
 単一のJPY建て商品、初期建玉0、GTC指値、手数料0の再生に絞っている。現物の初期現金・残高制約・post-onlyの指定は取引所側の接続先が扱う。GMOの両建て・決済専用注文、成行、IOC/FOK、資金調達費、証拠金・ロスカットは未対応。未対応の注文方式は接続先で明示的に拒否する。
 
-`wakeup()` は次の1秒レコードへ進める。従来のfirebots評価の固定時刻接続を維持する。整数秒周期には `wakeup_every_seconds(interval)` を使う。各判断の秒内時刻は `decision_offset` で指定する。`sleep(seconds)` は期限以後の最初の保存秒まで進むため、0.5秒待機などは1秒データの粒度へ切り上がる。サブ秒のイベント順序は再現しない。
+`wakeup()` は次の市場データレコードへ進める。整数秒周期には `wakeup_every_seconds(interval)` を使う。各判断の秒内時刻は `decision_offset` で指定する。`sleep(seconds)` は期限以後の最初の保存レコードまで進むため、細かな待機もデータ間隔の粒度へ切り上がる。サブ秒のイベント順序は再現しない。
 
 touch・through・queue_touchの3モデルを持つ。方向別出来高と板数量を注文間で共有する。post-only注文が到着時の板を跨ぐ場合は拒否する。取消完了が集計区間内なら、その区間での約定を許す。3モデルを損益の上下限とは扱わない。実際の待ち順・API障害・通知遅延は未再現。
 
 出力先が既存なら停止する。同じ出力先で再実行するときは `--overwrite` を指定する。この場合は出力先ディレクトリ全体を削除して作り直すため、以前のグラフや監査結果、独自に追加したファイルも消える。入力データ、作業ディレクトリ、参照ソースを含む場所や、リンクされたディレクトリは上書きできない。
 
-`results.json` は完了時だけ作る。約定台帳、CSV、Markdownも保存する。独立監査は次の入口を使う。assertで照合するため、`python -O` は使わない。
+`results.json` は完了時だけ作る。約定台帳、CSV、Markdownも保存する。マークアウトは1・5・30・60秒後とデータ間隔後の価格を集計する。該当時刻のレコードがなければ対象外とし、別の時刻の価格で補わない。独立監査は次の入口を使う。assertで照合するため、`python -O` は使わない。
 
 ```powershell
 uv run --extra backtest python -m backtest2.audit --data <保存データ> --results <結果>
@@ -66,7 +66,7 @@ uv run --extra backtest --with matplotlib python -m backtest2.plot --data <保�
 
 既定の出力先は `<結果>/pnl.svg`。`--output <ファイル.png>` などで形式と出力先を変更できる。`--case <ケース名>` と `--model <モデル名>` は複数指定でき、省略時は全ケース・全モデルを描画する。モデルごとにパネルを分け、凡例に最終損益を表示する。時刻は既定でUTC、日本時間は `--utc-offset 9` を指定する。
 
-縦軸は現金増減に未決済建玉の清算価値を加えたJPY損益。1秒ごとの板を使い、買い建玉はbid側、売り建玉はask側を数量分消費して評価する。入力ハッシュと各区間の最終損益・建玉を保存結果と照合する。独立して再生した区間は前区間の最終損益を加算してつなぎ、境界を点線で表示する。手数料・資金調達費などを追加推計する機能はない。
+縦軸は現金増減に未決済建玉の清算価値を加えたJPY損益。各バーの板で評価する。粗い間隔ではバー内の価格・注文順序を復元できず、約定モデルは集計OHLCVに基づく近似となる。入力ハッシュと各区間の最終損益・建玉を保存結果と照合する。独立して再生した区間は前区間の最終損益を加算してつなぐ。
 
 ## 開発確認
 

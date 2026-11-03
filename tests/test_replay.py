@@ -77,21 +77,20 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
                 self.engine.row = market(1, buy_count=buy_count, sell_count=sell_count)
                 self.assertEqual(await executions.get_data(), [dict(side=side) for side in expected])
 
-    async def test_market_board_displays_arrived_orders_until_cancel_is_effective(self):
+    async def test_market_board_returns_stored_depth_without_adding_orders(self):
         order = self.place()
         board = MarketBoard(self.engine)
-        self.assertEqual(board.sort(), [[(90., .1)], [(120., .1)]])
+        self.assertEqual(board.sort(), ([[90., .1]], [[120., .1]]))
         self.engine.now = 3.
         self.engine.submit_order('BUY', .002, 90.)
         self.engine.submit_order('SELL', .003, 120.)
         self.engine.now = 5.
         bids, asks = board.sort()
-        self.assertEqual(bids[0], (100., .004))
-        self.assertAlmostEqual(bids[1][1], .102)
-        self.assertAlmostEqual(asks[0][1], .103)
-        self.assertEqual((board.best_bid, board.best_ask), (100., 120.))
+        self.assertIs(bids, self.engine.row['bids'])
+        self.assertIs(asks, self.engine.row['asks'])
+        self.assertEqual((board.best_bid, board.best_ask), (90., 120.))
         self.engine.cancel_order(order)
-        self.assertEqual(board.sort()[0][0], (100., .004))
+        self.assertEqual(board.sort()[0][0], [90., .1])
         self.engine.now = 6.
         self.assertEqual(board.sort()[0][0][0], 90.)
 

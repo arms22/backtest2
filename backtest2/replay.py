@@ -106,19 +106,10 @@ class MarketBoard:
         self.engine = engine
 
     def sort(self):
-        engine = self.engine
-        sides = []
-        for side, book in (('BUY', engine.row['bids']), ('SELL', engine.row['asks'])):
-            # Historical books cannot contain our hypothetical orders. Add them
-            # before the real bot subtracts its own displayed quantity.
-            levels = dict(book)
-            for order in engine.orders:
-                if (order['side'] == side and order['arrival'] <= engine.now and
-                        order['remaining'] > 0 and order['cancel_done'] > engine.now):
-                    levels[order['price']] = levels.get(order['price'], 0) + order['remaining']
-            sides.append(sorted(levels.items(), reverse=side == 'BUY'))
-        self.best_bid, self.best_ask = sides[0][0][0], sides[1][0][0]
-        return sides
+        row = self.engine.row
+        bids, asks = row['bids'], row['asks']
+        self.best_bid, self.best_ask = bids[0][0], asks[0][0]
+        return bids, asks
 
 
 class Executions:
@@ -131,10 +122,11 @@ class Executions:
 
 
 class ReplayEngine:
-    def __init__(self, bot, config, start, end, segment, name, strategy_factory):
+    def __init__(self, bot, config, start, end, segment, name, strategy_factory, interval_seconds=1):
         if end <= start:
             raise ValueError('Invalid replay period')
         self.config, self.start, self.end, self.segment = config, start, end, segment
+        self.interval_seconds = interval_seconds
         self.bot, self.name = bot, name
         if hasattr(bot, 'logger'):
             bot.logger = ReplayLogger()
@@ -147,6 +139,7 @@ class ReplayEngine:
         self.cash, self.turnover, self.peak, self.max_dd = 0., 0., 0., 0.
         self.max_position, self.max_pending, self.held_seconds = 0., 0., 0
         self.daily = {}
+        self.day_number, self.day_label = None, None
         self.last_equity, self.first_position_time = 0., None
         self.longest_holding, self.previous_position = 0., 0.
         self.close_profit, self.close_loss = 0., 0.
@@ -232,11 +225,10 @@ class ReplayEngine:
     def market_update(self, row):
         self.row = row
         timestamp = row['timestamp']
-        interval_start = self.previous_time if self.previous_time is not None else timestamp - 1
+        interval_start = self.previous_time if self.previous_time is not None else timestamp - self.interval_seconds
         # Each side has one shared aggregate budget, including overlapping orders.
         budget = {'BUY': row['sell_volume'], 'SELL': row['buy_volume']}
-        taker_books = {'BUY': [list(level) for level in row['asks']],
-                       'SELL': [list(level) for level in row['bids']]}
+        taker_books = {}
         # Different orders share depth; maker allocation follows price/time priority.
         ordered = sorted(self.orders, key=lambda o: (o['side'],
                          -o['price'] if o['side'] == 'BUY' else o['price'], o['arrival']))
@@ -250,8 +242,10 @@ class ReplayEngine:
             if order['arrival'] > timestamp:
                 continue
             buy = order['side'] == 'BUY'
-            book = taker_books[order['side']]
             if not order['activated']:
+                book = taker_books.get(order['side'])
+                if book is None:
+                    book = row['asks'] if buy else row['bids']
                 order['activated'] = True
                 if order['state'] == 'pending':
                     order['state'] = 'active'
@@ -269,6 +263,9 @@ class ReplayEngine:
                 available = sum(q for p, q in executable)
                 quantity = min(order['remaining'], available) if stop > timestamp else 0
                 if quantity > 0:
+                    if order['side'] not in taker_books:
+                        book = [list(level) for level in book]
+                        taker_books[order['side']] = book
                     self.fill(order, quantity, vwap(executable, quantity), timestamp, 'taker')
                     remaining = quantity
                     for level in book:
@@ -320,20 +317,25 @@ class ReplayEngine:
             self.max_pending = max(self.max_pending, abs(position + sign * pending))
         self.peak = max(self.peak, equity)
         self.max_dd = max(self.max_dd, self.peak - equity)
-        self.held_seconds += int(abs(position) > 1e-9)
+        self.held_seconds += self.interval_seconds * int(abs(position) > 1e-9)
         second = self.row['second']
         if abs(position) > 1e-9:
             if not self.previous_position or self.previous_position * position < 0:
                 self.first_position_time = second
-            self.longest_holding = max(self.longest_holding, second - self.first_position_time)
+            self.longest_holding = max(
+                self.longest_holding, second + self.interval_seconds - self.first_position_time)
         else:
             self.first_position_time = None
         self.previous_position = position
-        day = datetime.fromtimestamp(second + 9 * 3600, timezone.utc).strftime('%Y-%m-%d')
+        day_number = (second + 9 * 3600) // 86400
+        if day_number != self.day_number:
+            self.day_number = day_number
+            self.day_label = datetime.fromtimestamp(second + 9 * 3600, timezone.utc).strftime('%Y-%m-%d')
+        day = self.day_label
         self.daily[day] = self.daily.get(day, 0.) + equity - self.last_equity
         self.last_equity = equity
-        if (second + 1 - self.start) % 3600 == 0:
-            self.hourly.append([second + 1, equity])
+        if (second + self.interval_seconds - self.start) % 3600 == 0:
+            self.hourly.append([second + self.interval_seconds, equity])
 
     async def tick(self, row):
         if row['timestamp'] > row['second'] + self.config.decision_offset:

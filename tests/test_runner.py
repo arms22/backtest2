@@ -1,4 +1,6 @@
 import json
+import asyncio
+from types import ModuleType
 from pathlib import Path
 import tempfile
 import unittest
@@ -12,6 +14,48 @@ from helpers import Adapter, PassiveBot, save_market
 
 
 class RunnerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_runner_scopes_asyncio_patch_to_selected_modules(self):
+        module = ModuleType('example_bot')
+        module.asyncio = asyncio
+        original_gather = asyncio.gather
+        observed = []
+
+        class Bot(PassiveBot):
+            async def run(self, strategy):
+                observed.append(module.asyncio is not asyncio)
+                observed.append(asyncio.gather is original_gather)
+                await super().run(strategy)
+
+        with tempfile.TemporaryDirectory() as directory:
+            data, output = Path(directory)/'data', Path(directory)/'output'
+            data.mkdir()
+            save_market(data, range(2000, 2004))
+            case = BotCase('patched', Bot, Adapter, asyncio_modules=(module,))
+            await run_backtest(data, output, [case], [ReplayConfig()], __file__,
+                               progress=lambda text: None)
+        self.assertEqual(observed, [True, True])
+        self.assertIs(module.asyncio, asyncio)
+
+    async def test_minute_and_hour_intervals_use_data_timestamps(self):
+        for interval in (60, 3600):
+            with self.subTest(interval=interval), tempfile.TemporaryDirectory() as directory:
+                data, output = Path(directory)/'data', Path(directory)/'output'
+                data.mkdir()
+                save_market(data, [0, interval, interval * 2, interval * 3])
+                manifest_path = data/'fetch_manifest.json'
+                manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+                manifest['start_utc'] = '1970-01-01T00:00:00Z'
+                manifest['end_utc_exclusive'] = '1970-01-01T00:04:00Z' if interval == 60 else '1970-01-01T04:00:00Z'
+                manifest['interval_seconds'] = 59
+                manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+                bundle = await run_backtest(data, output, [BotCase('other', PassiveBot, Adapter)],
+                                            [ReplayConfig()], __file__, split_at=[interval * 2],
+                                            progress=lambda text: None)
+                self.assertEqual(bundle['input_manifest']['interval_seconds'], interval)
+                self.assertEqual(len(bundle['results']), 2)
+                _, curves = load_pnl_series(data, output)
+                self.assertEqual(curves[0]['values'][-1], 0.)
+
     async def test_custom_input_paths_are_reused_by_audit_and_plot(self):
         with tempfile.TemporaryDirectory() as directory:
             data, output = Path(directory)/'data', Path(directory)/'output'
@@ -62,19 +106,18 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(r['gross_pnl'] == 0 and r['turnover'] == 0
                                 for r in result['results']))
 
-    async def test_bad_data_never_creates_completion_result(self):
+    async def test_missing_rows_are_not_validated_during_replay(self):
         with tempfile.TemporaryDirectory() as directory:
             data, output = Path(directory)/'data', Path(directory)/'output'
             data.mkdir()
-            save_market(data, [2000, 2002, 2003])
+            save_market(data, [2000, 2001, 2003])
             manifest_path = data/'fetch_manifest.json'
             manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
             del manifest['missing_intervals_utc_seconds'], manifest['invalid_rows']
             manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
-            with self.assertRaisesRegex(ValueError, 'Missing, duplicate'):
-                await run_backtest(data, output, [BotCase('other', PassiveBot, Adapter)],
-                                   [ReplayConfig()], __file__, progress=lambda text: None)
-            self.assertFalse((output/'results.json').exists())
+            await run_backtest(data, output, [BotCase('other', PassiveBot, Adapter)],
+                               [ReplayConfig()], __file__, progress=lambda text: None)
+            self.assertTrue((output/'results.json').exists())
 
 
 class SourceTests(unittest.TestCase):

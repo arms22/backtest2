@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from .replay import ReplayEngine
+from .asyncio_support import sequential_asyncio
 from .data import file_hash, iso, iter_market_rows, load_market_manifest, parse_time
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class BotCase:
     clock_context: Callable = nullcontext
     code_files: tuple = ()
     metadata: dict = field(default_factory=dict)
+    asyncio_modules: tuple = ()
 
     def __post_init__(self):
         if not re.fullmatch(r'[A-Za-z0-9_-]+', self.name):
@@ -39,9 +41,9 @@ def source_hashes(cases, experiment_file):
 
 
 
-def markouts(fills, midpoints):
+def markouts(fills, midpoints, interval_seconds=1):
     result = {}
-    for horizon in (1, 5, 30, 60):
+    for horizon in sorted({1, 5, 30, 60, interval_seconds}):
         changes, volume = [], 0.
         for fill in fills:
             future = midpoints.get(math.floor(fill['t']) + horizon)
@@ -82,6 +84,9 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     data_end = parse_time(manifest['end_utc_exclusive'])
     start = data_start if start is None else start
     end = data_end if end is None else end
+    interval_seconds = manifest['interval_seconds']
+    if any((value - data_start) % interval_seconds for value in (start, end, *split_at)):
+        raise ValueError('Period and split boundaries must align to market intervals')
     if not data_start <= start < end <= data_end:
         raise ValueError('Requested period lies outside the saved market data')
     if list(split_at) != sorted(set(split_at)) or any(not start < t < end for t in split_at):
@@ -99,12 +104,14 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     prepare_output(output, overwrite, protected)
     boundaries = [start, *split_at, end]
     results, engines, midpoints, segment_index = [], [], {}, -1
+    completed_fills = []
 
     async def finish_segment():
         for engine, case in engines:
             result = await engine.finish()
             result['case'] = case.name
             result['bot_metadata'] = case.metadata
+            completed_fills.append(engine.fills)
             results.append(result)
             path = output/f'{engine.segment}_{engine.name}_fills.jsonl.gz'
             with gzip.open(path, 'wt', encoding='utf-8') as target:
@@ -112,14 +119,16 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
                     target.write(json.dumps(fill, separators=(',', ':')) + '\n')
 
     with ExitStack() as contexts:
+        contexts.enter_context(sequential_asyncio(
+            module for case in cases for module in case.asyncio_modules))
         # Only external clocks are rebound. Indicator and order rules stay in the bot.
         for case in cases:
             contexts.enter_context(case.clock_context())
         try:
-            for row in iter_market_rows(data, start, end, data_file):
+            for row in iter_market_rows(data, start, end, data_file, manifest['interval_seconds']):
                 second = row['second']
                 midpoints[second] = (row['bid'] + row['ask']) / 2
-                if segment_index < 0 or second == boundaries[segment_index + 1]:
+                while segment_index < 0 or second >= boundaries[segment_index + 1]:
                     if engines:
                         await finish_segment()
                     segment_index += 1
@@ -130,21 +139,19 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
                             engine = ReplayEngine(case.create_bot(), config, boundaries[segment_index],
                                                   boundaries[segment_index + 1],
                                                   f'segment_{segment_index + 1:03}', name,
-                                                  case.strategy_factory)
+                                                  case.strategy_factory, interval_seconds)
                             engines.append((engine, case))
                             await engine.launch()
                 for engine, case in engines:
                     await engine.tick(row)
-                if (second + 1 - start) % 3600 == 0:
-                    progress(f'Replayed {iso(second+1)} ({len(engines)} cases/models)')
+                if (second + interval_seconds - start) % 3600 == 0:
+                    progress(f'Replayed {iso(second+interval_seconds)} ({len(engines)} cases/models)')
             await finish_segment()
         finally:
             await asyncio.gather(*(engine.stop() for engine, case in engines), return_exceptions=True)
 
-    for result in results:
-        path = output/f'{result["segment"]}_{result["name"]}_fills.jsonl.gz'
-        with gzip.open(path, 'rt', encoding='utf-8') as source:
-            result['fill_markouts'] = markouts([json.loads(line) for line in source], midpoints)
+    for result, fills in zip(results, completed_fills):
+        result['fill_markouts'] = markouts(fills, midpoints, interval_seconds)
     if source_hashes(cases, experiment_file) != hashes:
         raise ValueError('Source files changed during the replay; no completion result written')
     with (output/'summary.csv').open('w', newline='', encoding='utf-8-sig') as target:
