@@ -16,7 +16,8 @@ def load_pnl_series(data, results, cases=(), models=()):
     """Reconstruct one-second liquidation MTM, summing independent segments."""
     data, results = Path(data), Path(results)
     bundle = json.loads((results/'results.json').read_text(encoding='utf-8'))
-    manifest = load_market_manifest(data)
+    data_file = bundle.get('input_data_file', 'market_rows.jsonl.gz')
+    manifest = load_market_manifest(data, data_file, bundle.get('input_manifest_file', 'fetch_manifest.json'))
     if manifest['raw_sha256'] != bundle['input_raw_sha256']:
         raise ValueError('Market data differs from the backtest input')
     selected = [r for r in bundle['results'] if (not cases or r['case'] in cases)
@@ -35,7 +36,7 @@ def load_pnl_series(data, results, cases=(), models=()):
             fills = [json.loads(line) for line in source]
         states[segment, name] = dict(result=result, fills=fills, cursor=0, cash=0., sats=0)
 
-    for row in iter_market_rows(data, start, end, manifest['product']):
+    for row in iter_market_rows(data, start, end, data_file):
         index = bisect.bisect_right(boundaries, row['second'])
         segment = f'segment_{index:03}'
         for name, curve in curves.items():

@@ -38,7 +38,7 @@ def save_market(directory, seconds):
             row['bids_raw'] = json.dumps(row.pop('bids'))
             row['asks_raw'] = json.dumps(row.pop('asks'))
             target.write(json.dumps(row)+'\n')
-    manifest = dict(start_utc=iso(2000), end_utc_exclusive=iso(2004), product='TEST_JPY',
+    manifest = dict(start_utc=iso(2000), end_utc_exclusive=iso(2004),
                     missing_intervals_utc_seconds=[], invalid_rows=[],
                     raw_sha256=file_hash(directory/'market_rows.jsonl.gz'))
     (directory/'fetch_manifest.json').write_text(json.dumps(manifest), encoding='utf-8')

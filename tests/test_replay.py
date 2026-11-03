@@ -9,7 +9,7 @@ from helpers import Adapter, PassiveBot, market
 
 class ReplayTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = ReplayEngine(PassiveBot(), ReplayConfig(), 0, 100, 'test', 'coin_jpy', 'test', Adapter)
+        self.engine = ReplayEngine(PassiveBot(), ReplayConfig(), 0, 100, 'test', 'test', Adapter)
         await self.engine.launch()
 
     async def asyncTearDown(self):
@@ -118,7 +118,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 raise ValueError('broken startup')
 
         engine = ReplayEngine(BrokenBot(), ReplayConfig(), 0, 10,
-                              'test', 'TEST_JPY', 'broken', Adapter)
+                              'test', 'broken', Adapter)
         with self.assertRaisesRegex(ValueError, 'broken startup'):
             await engine.launch()
         self.assertTrue(engine.task.done())
@@ -129,7 +129,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                 await asyncio.sleep(10)
 
         engine = ReplayEngine(SleepingBot(), ReplayConfig(tick_timeout=.01),
-                              0, 10, 'test', 'TEST_JPY', 'sleeping', Adapter)
+                              0, 10, 'test', 'sleeping', Adapter)
         try:
             with self.assertRaises(TimeoutError):
                 await engine.launch()
@@ -150,7 +150,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                     self.times.append(ACTIVE.get().now)
 
         bot = TimedBot()
-        engine = ReplayEngine(bot, ReplayConfig(), 0, 40, 'test', 'coin_jpy', 'clock', Adapter)
+        engine = ReplayEngine(bot, ReplayConfig(), 0, 40, 'test', 'clock', Adapter)
         try:
             await engine.launch()
             for second in range(35):

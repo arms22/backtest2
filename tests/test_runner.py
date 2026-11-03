@@ -4,12 +4,38 @@ import tempfile
 import unittest
 
 from backtest2.data import file_hash
+from backtest2.audit import audit
+from backtest2.plot import load_pnl_series
 from backtest2.runner import BotCase, prepare_output, run_backtest, source_hashes
 from backtest2.replay import ReplayConfig
 from helpers import Adapter, PassiveBot, save_market
 
 
 class RunnerTests(unittest.IsolatedAsyncioTestCase):
+    async def test_custom_input_paths_are_reused_by_audit_and_plot(self):
+        with tempfile.TemporaryDirectory() as directory:
+            data, output = Path(directory)/'data', Path(directory)/'output'
+            data.mkdir()
+            save_market(data, range(2000, 2004))
+            (data/'market_rows.jsonl.gz').rename(data/'quotes.gz')
+            (data/'fetch_manifest.json').rename(data/'source.json')
+            manifest_path = data/'source.json'
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            manifest['output'] = dict(file='quotes.gz', sha256=manifest.pop('raw_sha256'))
+            del manifest['missing_intervals_utc_seconds'], manifest['invalid_rows']
+            manifest_text = json.dumps(manifest)
+            manifest_path.write_text(manifest_text, encoding='utf-8')
+            case = BotCase('custom', PassiveBot, Adapter)
+            bundle = await run_backtest(data, output, [case], [ReplayConfig()],
+                                        __file__, progress=lambda text: None,
+                                        data_file='quotes.gz', manifest_file='source.json')
+            self.assertEqual(bundle['input_data_file'], 'quotes.gz')
+            self.assertEqual(bundle['input_manifest_file'], 'source.json')
+            self.assertTrue(audit(data, output)['checks'][0]['flat'])
+            _, curves = load_pnl_series(data, output)
+            self.assertEqual(curves[0]['values'][-1], 0.)
+            self.assertEqual(manifest_path.read_text(encoding='utf-8'), manifest_text)
+
     async def test_segments_output_and_fresh_bots(self):
         bots = []
 
@@ -41,6 +67,10 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             data, output = Path(directory)/'data', Path(directory)/'output'
             data.mkdir()
             save_market(data, [2000, 2002, 2003])
+            manifest_path = data/'fetch_manifest.json'
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+            del manifest['missing_intervals_utc_seconds'], manifest['invalid_rows']
+            manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
             with self.assertRaisesRegex(ValueError, 'Missing, duplicate'):
                 await run_backtest(data, output, [BotCase('other', PassiveBot, Adapter)],
                                    [ReplayConfig()], __file__, progress=lambda text: None)

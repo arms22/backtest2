@@ -24,7 +24,7 @@ def liquidation_price(book, quantity):
 
 def audit(data, output):
     bundle = json.loads((output/'results.json').read_text(encoding='utf-8'))
-    raw_path = data/'market_rows.jsonl.gz'
+    raw_path = data/bundle.get('input_data_file', 'market_rows.jsonl.gz')
     assert file_hash(raw_path) == bundle['input_raw_sha256'], 'Market data hash differs'
     start, end = parse_time(bundle['start_utc']), parse_time(bundle['end_utc_exclusive'])
     boundaries = [start, *map(parse_time, bundle['split_at']), end]

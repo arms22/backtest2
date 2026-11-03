@@ -73,10 +73,11 @@ def prepare_output(output, overwrite=False, protected_paths=()):
 
 
 async def run_backtest(data, output, cases, configs, experiment_file, start=None, end=None,
-                       split_at=(), progress=print, overwrite=False):
+                       split_at=(), progress=print, overwrite=False,
+                       data_file='market_rows.jsonl.gz', manifest_file='fetch_manifest.json'):
     """Fresh bot/inventory per segment; behavior and parameters come from each case."""
     data, output = Path(data), Path(output)
-    manifest = load_market_manifest(data)
+    manifest = load_market_manifest(data, data_file, manifest_file)
     data_start = parse_time(manifest['start_utc'])
     data_end = parse_time(manifest['end_utc_exclusive'])
     start = data_start if start is None else start
@@ -93,7 +94,7 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     if len(set(config_names)) != len(config_names):
         raise ValueError('Configurations need distinct model/latency labels; run other sensitivities separately')
     hashes = source_hashes(cases, experiment_file)
-    protected = [data, Path.cwd(), Path(__file__).parent, experiment_file]
+    protected = [data, data/data_file, data/manifest_file, Path.cwd(), Path(__file__).parent, experiment_file]
     protected.extend(p for case in cases for p in case.code_files)
     prepare_output(output, overwrite, protected)
     boundaries = [start, *split_at, end]
@@ -115,7 +116,7 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
         for case in cases:
             contexts.enter_context(case.clock_context())
         try:
-            for row in iter_market_rows(data, start, end, manifest['product']):
+            for row in iter_market_rows(data, start, end, data_file):
                 second = row['second']
                 midpoints[second] = (row['bid'] + row['ask']) / 2
                 if segment_index < 0 or second == boundaries[segment_index + 1]:
@@ -128,7 +129,7 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
                             name = f'{case.name}_{config.model}_{config.latency:g}s'
                             engine = ReplayEngine(case.create_bot(), config, boundaries[segment_index],
                                                   boundaries[segment_index + 1],
-                                                  f'segment_{segment_index + 1:03}', manifest['product'], name,
+                                                  f'segment_{segment_index + 1:03}', name,
                                                   case.strategy_factory)
                             engines.append((engine, case))
                             await engine.launch()
@@ -165,6 +166,7 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     (output/'REPORT.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
     # Written last: its presence marks a successfully completed run.
     bundle = dict(input_manifest=manifest, input_raw_sha256=manifest['raw_sha256'],
+                  input_data_file=str(data_file), input_manifest_file=str(manifest_file),
                   start_utc=iso(start), end_utc_exclusive=iso(end), split_at=[iso(t) for t in split_at],
                   code_sha256=hashes, results=results)
     (output/'results.json').write_text(json.dumps(bundle, indent=2), encoding='utf-8')

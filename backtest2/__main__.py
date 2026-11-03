@@ -13,6 +13,8 @@ def main():
     parser.add_argument('--experiment', required=True, help='Module exposing build_cases(), e.g. backtests.cfdmm')
     parser.add_argument('--case', action='append', help='Case name; repeat to select multiple cases')
     parser.add_argument('--data', type=Path, required=True, help='Saved market-data directory with manifest')
+    parser.add_argument('--data-file', default='market_rows.jsonl.gz', help='Gzip JSONL path, relative to --data or absolute')
+    parser.add_argument('--manifest-file', default='fetch_manifest.json', help='Manifest path, relative to --data or absolute')
     parser.add_argument('--output', type=Path, required=True, help='Output directory')
     parser.add_argument('--overwrite', action='store_true',
                         help='Delete the existing output directory before replaying')
@@ -38,7 +40,8 @@ def main():
     result = asyncio.run(run_backtest(args.data, args.output, cases, configs, module.__file__,
                                       parse_time(args.start) if args.start else None,
                                       parse_time(args.end) if args.end else None,
-                                      [parse_time(t) for t in args.split_at], overwrite=args.overwrite))
+                                      [parse_time(t) for t in args.split_at], overwrite=args.overwrite,
+                                      data_file=args.data_file, manifest_file=args.manifest_file))
     print(f'Saved {len(result["results"])} results to {args.output}')
 
 

@@ -131,11 +131,11 @@ class Executions:
 
 
 class ReplayEngine:
-    def __init__(self, bot, config, start, end, segment, product_code, name, strategy_factory):
-        if end <= start or not product_code:
-            raise ValueError('Invalid replay period or empty product')
+    def __init__(self, bot, config, start, end, segment, name, strategy_factory):
+        if end <= start:
+            raise ValueError('Invalid replay period')
         self.config, self.start, self.end, self.segment = config, start, end, segment
-        self.bot, self.product_code, self.name = bot, product_code, name
+        self.bot, self.name = bot, name
         if hasattr(bot, 'logger'):
             bot.logger = ReplayLogger()
         self.now, self.row, self.previous_time = float(start), None, None

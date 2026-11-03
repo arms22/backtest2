@@ -26,16 +26,22 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def load_market_manifest(directory):
+def load_market_manifest(directory, data_file='market_rows.jsonl.gz', manifest_file='fetch_manifest.json'):
     directory = Path(directory)
-    manifest = json.loads((directory/'fetch_manifest.json').read_text(encoding='utf-8'))
-    if manifest['missing_intervals_utc_seconds'] or manifest['invalid_rows']:
+    manifest = json.loads((directory/manifest_file).read_text(encoding='utf-8'))
+    if manifest.get('missing_intervals_utc_seconds') or manifest.get('invalid_rows'):
         raise ValueError('Market data contains missing or invalid rows')
-    if file_hash(directory/'market_rows.jsonl.gz') != manifest['raw_sha256']:
+    expected_hash = manifest.get('raw_sha256')
+    if expected_hash is None:
+        expected_hash = manifest.get('output', {}).get('sha256')
+    if not isinstance(expected_hash, str) or not expected_hash:
+        raise ValueError('Manifest has no data SHA256')
+    if file_hash(directory/data_file) != expected_hash:
         raise ValueError('Raw data hash does not match the manifest')
     if parse_time(manifest['end_utc_exclusive']) <= parse_time(manifest['start_utc']):
         raise ValueError('Invalid market-data period')
-    return manifest
+    # Normalize in memory for runner/plot consumers; never rewrite the source manifest.
+    return dict(manifest, raw_sha256=expected_hash)
 
 
 def validate_market_row(row):
@@ -68,9 +74,9 @@ def validate_market_row(row):
     return bids, asks
 
 
-def iter_market_rows(directory, start, end, product_code):
+def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
     previous = start - 1
-    with gzip.open(Path(directory)/'market_rows.jsonl.gz', 'rt', encoding='utf-8') as source:
+    with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
         for line in source:
             row = json.loads(line)
             stamp = datetime.fromisoformat(row['time'].replace('Z', '+00:00'))
@@ -84,8 +90,6 @@ def iter_market_rows(directory, start, end, product_code):
                 break
             if second != previous + 1:
                 raise ValueError('Missing, duplicate or unordered market seconds')
-            if row.get('product_code', product_code) != product_code:
-                raise ValueError('Mixed products in a single-product replay')
             row['bids'], row['asks'] = validate_market_row(row)
             row['timestamp'], row['second'] = timestamp, second
             previous = second

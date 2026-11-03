@@ -32,6 +32,12 @@ uv run --extra backtest python -m backtest2 --help
 
 入力は `fetch_manifest.json` と `market_rows.jsonl.gz`。1商品・連続した1秒ごとの板、OHLC、売買方向別数量・件数を使用する。既存のfirebots用保存形式を引き継いでいる。別の取引所のデータは商品名・取得条件とともに同形式へ書き出す。取得処理はこのライブラリに含めない。
 
+ファイル名を変える場合は `--data-file quotes.jsonl.gz --manifest-file source.json` を指定する。パスは `--data` からの相対パス、または絶対パスで指定できる。Python APIでは `run_backtest(..., data_file=..., manifest_file=...)` を使う。指定したパスを結果に保存するため、監査と描画も同じファイルを読む。相対パスを使えば、データディレクトリ全体を移動しても参照を維持できる。
+
+共通エンジンは商品・ペアの識別子を扱わず、manifestの `product` や行の `product_code` を要求・参照しない。識別子はボット側のケース定義で `strategy_factory` に渡し、取引所アダプターが管理する。入力はあらかじめ単一商品へ絞り込む。
+
+データのSHA256はmanifestの `raw_sha256` を使い、未指定またはnullの場合は `output.sha256` を使う。InfluxDB Fetcherの時間範囲モードによる出力は、必要な市場データ列がそろっていれば `--data-file query_results.jsonl.gz` で直接読める。`missing_intervals_utc_seconds` と `invalid_rows` は省略できる。値が記録されていれば異常の有無を確認し、項目の有無にかかわらず再生中に連続秒・板・OHLC・約定集計を検査する。元のmanifestは書き換えない。複数ファイルの結合には対応していない。
+
 ソースの記録はパッケージ内のPythonファイル、実験ファイル、`code_files` が対象。ハッシュのキーは全参照ファイルの共通祖先からの相対パスであり、複数リポジトリを参照できる。参照ソースはケース側で明示する。
 
 ## 現在の範囲
