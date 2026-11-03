@@ -63,36 +63,6 @@ def load_market_manifest(directory, data_file='market_rows.jsonl.gz', manifest_f
                 interval_seconds=get_interval_seconds(directory, manifest, data_file))
 
 
-def validate_market_row(row):
-    bids, asks = (json.loads(row[k]) for k in ('bids_raw', 'asks_raw'))
-    if not bids or not asks:
-        raise ValueError('Empty book')
-    if not all(math.isfinite(p) and math.isfinite(q) and p > 0 and q > 0
-               for p, q in bids + asks):
-        raise ValueError('Nonpositive/nonfinite book')
-    if any(a[0] <= b[0] for a, b in zip(bids, bids[1:])):
-        raise ValueError('Bids must be strictly descending')
-    if any(a[0] >= b[0] for a, b in zip(asks, asks[1:])):
-        raise ValueError('Asks must be strictly ascending')
-    if bids[0][0] >= asks[0][0] or (bids[0][0], asks[0][0]) != (row['bid'], row['ask']):
-        raise ValueError('Crossed/mismatched book')
-    for key in ('open', 'high', 'low', 'close', 'buy_volume', 'sell_volume',
-                'buy_count', 'sell_count', 'trades', 'delay'):
-        if not isinstance(row.get(key), (int, float)) or not math.isfinite(row[key]):
-            raise ValueError('Missing/nonfinite aggregate: ' + key)
-    if not (0 < row['low'] <= min(row['open'], row['close']) <=
-            max(row['open'], row['close']) <= row['high']):
-        raise ValueError('Invalid OHLC')
-    if min(row[k] for k in ('buy_volume', 'sell_volume', 'buy_count', 'sell_count', 'trades')) < 0:
-        raise ValueError('Negative activity')
-    if row['buy_count'] + row['sell_count'] != row['trades']:
-        raise ValueError('Trade counts disagree')
-    for side in ('buy', 'sell'):
-        if (row[side + '_count'] == 0) != (row[side + '_volume'] == 0):
-            raise ValueError('Count/volume disagree')
-    return bids, asks
-
-
 def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz', interval_seconds=1):
     """Decode stored market data without row-level validation."""
     with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
