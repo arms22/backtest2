@@ -37,7 +37,7 @@ def load_pnl_series(data, results, cases=(), models=()):
         states[segment, name] = dict(result=result, fills=fills, cursor=0, cash=0., sats=0)
 
     interval_seconds = manifest['interval_seconds']
-    for row in iter_market_rows(data, start, end, data_file, interval_seconds):
+    for row in iter_market_rows(data, start, end, data_file):
         index = bisect.bisect_right(boundaries, row['second'])
         segment = f'segment_{index:03}'
         for name, curve in curves.items():

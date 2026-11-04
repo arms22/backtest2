@@ -87,8 +87,8 @@ def summarize_markouts(records):
                        for horizon in record['markouts']})
     for horizon in horizons:
         changes, volume = [], 0.
-        eligible_count = missing_count = censored_count = 0
-        eligible_volume = missing_volume = censored_volume = 0.
+        eligible_count = censored_count = 0
+        eligible_volume = censored_volume = 0.
         for record in records:
             fill_markout = record['markouts'][str(horizon)]
             if fill_markout['status'] == 'censored':
@@ -97,10 +97,6 @@ def summarize_markouts(records):
                 continue
             eligible_count += 1
             eligible_volume += record['size']
-            if fill_markout['status'] == 'missing':
-                missing_count += 1
-                missing_volume += record['size']
-                continue
             changes.append(fill_markout['markout_yen'])
             volume += record['size']
         markout_yen = math.fsum(changes)
@@ -109,10 +105,9 @@ def summarize_markouts(records):
             yen_per_btc=markout_yen/volume if volume else None,
             markout_yen=markout_yen,
             eligible_count=eligible_count, observed_count=len(changes),
-            missing_count=missing_count, censored_count=censored_count,
-            missing_rate=missing_count/eligible_count if eligible_count else None,
+            censored_count=censored_count,
             eligible_volume=eligible_volume, observed_volume=volume,
-            missing_volume=missing_volume, censored_volume=censored_volume,
+            censored_volume=censored_volume,
         )
     return result
 
@@ -143,12 +138,8 @@ def prepare_output(output, overwrite=False, protected_paths=()):
     output.mkdir(parents=True, exist_ok=False)
 
 
-async def run_backtest(data, output, cases, configs, experiment_file, start=None, end=None,
-                       split_at=(), progress=print, overwrite=False,
-                       data_file='market_rows.jsonl.gz', manifest_file='fetch_manifest.json'):
-    """Fresh bot/inventory per segment; behavior and parameters come from each case."""
-    data, output = Path(data), Path(output)
-    manifest = load_market_manifest(data, data_file, manifest_file)
+def _validate_run(manifest, start, end, split_at, cases, configs):
+    """Resolve the period and reject inconsistent replay selections."""
     data_start = parse_time(manifest['start_utc'])
     data_end = parse_time(manifest['end_utc_exclusive'])
     start = data_start if start is None else start
@@ -167,88 +158,41 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     config_names = [f'{c.model}_{c.latency:g}s' for c in configs]
     if len(set(config_names)) != len(config_names):
         raise ValueError('Configurations need distinct model/latency labels; run other sensitivities separately')
-    hashes = source_hashes(cases, experiment_file)
-    protected = [data, data/data_file, data/manifest_file, Path.cwd(), Path(__file__).parent, experiment_file]
-    protected.extend(p for case in cases for p in case.code_files)
-    prepare_output(output, overwrite, protected)
-    boundaries = [start, *split_at, end]
-    results, engines, midpoints, segment_index = [], [], [], -1
-    completed_fills = []
+    return start, end
 
-    async def finish_segment():
-        for engine, case in engines:
-            result = await engine.finish()
-            result['case'] = case.name
-            result['bot_metadata'] = case.metadata
-            matches, open_lots = match_fills_fifo(engine.fills)
-            result['match_slice_count'] = len(matches)
-            result['match_realized_pnl'] = math.fsum(
-                match['gross_realized_pnl'] for match in matches)
-            result['open_lot_count_at_cutoff'] = len(open_lots)
-            result['open_quantity_at_cutoff'] = math.fsum(
-                lot['size'] for lot in open_lots)
-            assert math.isclose(result['match_realized_pnl'], result['gross_pnl'], abs_tol=1e-5)
-            assert math.isclose(math.fsum(match['turnover'] for match in matches),
-                                result['turnover'], abs_tol=1e-4)
-            assert math.isclose(result['open_quantity_at_cutoff'],
-                                abs(result['terminal_position']), abs_tol=1e-8)
-            result['fill_match_summary'] = summarize_matches(matches)
-            completed_fills.append(engine.fills)
-            results.append(result)
-            path = output/f'{engine.segment}_{engine.name}_fills.jsonl.gz'
-            with gzip.open(path, 'wt', encoding='utf-8') as target:
-                for fill in engine.fills:
-                    target.write(json.dumps(fill, separators=(',', ':')) + '\n')
-            for suffix, records in (('matches', matches), ('open_lots', open_lots)):
-                derived_path = output/f'{engine.segment}_{engine.name}_{suffix}.jsonl.gz'
-                with gzip.open(derived_path, 'wt', encoding='utf-8') as target:
-                    for record in records:
-                        target.write(json.dumps(record, separators=(',', ':')) + '\n')
 
-    with ExitStack() as contexts:
-        contexts.enter_context(sequential_asyncio(
-            module for case in cases for module in case.asyncio_modules))
-        # Only external clocks are rebound. Indicator and order rules stay in the bot.
-        for case in cases:
-            contexts.enter_context(case.clock_context())
-        try:
-            for row in iter_market_rows(data, start, end, data_file, manifest['interval_seconds']):
-                second = row['second']
-                midpoints.append((row['timestamp'], (row['bid'] + row['ask']) / 2))
-                while segment_index < 0 or second >= boundaries[segment_index + 1]:
-                    if engines:
-                        await finish_segment()
-                    segment_index += 1
-                    engines = []
-                    for case in cases:
-                        for config in configs:
-                            name = f'{case.name}_{config.model}_{config.latency:g}s'
-                            engine = ReplayEngine(case.create_bot(), config, boundaries[segment_index],
-                                                  boundaries[segment_index + 1],
-                                                  f'segment_{segment_index + 1:03}', name,
-                                                  case.strategy_factory, interval_seconds)
-                            engines.append((engine, case))
-                            await engine.launch()
-                for engine, case in engines:
-                    await engine.tick(row)
-                if (second + interval_seconds - start) % 3600 == 0:
-                    progress(f'Replayed {iso(second+interval_seconds)} ({len(engines)} cases/models)')
-            await finish_segment()
-        finally:
-            await asyncio.gather(*(engine.stop() for engine, case in engines), return_exceptions=True)
+async def _finish_segment(engines, output, completed_runs):
+    for engine, case in engines:
+        result = await engine.finish()
+        result['case'] = case.name
+        result['bot_metadata'] = case.metadata
+        matches, open_lots = match_fills_fifo(engine.fills)
+        result['match_slice_count'] = len(matches)
+        result['match_realized_pnl'] = math.fsum(
+            match['gross_realized_pnl'] for match in matches)
+        result['open_lot_count_at_cutoff'] = len(open_lots)
+        result['open_quantity_at_cutoff'] = math.fsum(
+            lot['size'] for lot in open_lots)
+        assert math.isclose(result['match_realized_pnl'], result['gross_pnl'], abs_tol=1e-5)
+        assert math.isclose(math.fsum(match['turnover'] for match in matches),
+                            result['turnover'], abs_tol=1e-4)
+        assert math.isclose(result['open_quantity_at_cutoff'],
+                            abs(result['terminal_position']), abs_tol=1e-8)
+        result['fill_match_summary'] = summarize_matches(matches)
+        completed_runs.append((result, engine.fills))
+        path = output/f'{engine.segment}_{engine.name}_fills.jsonl.gz'
+        with gzip.open(path, 'wt', encoding='utf-8') as target:
+            for fill in engine.fills:
+                target.write(json.dumps(fill, separators=(',', ':')) + '\n')
+        for suffix, records in (('matches', matches), ('open_lots', open_lots)):
+            derived_path = output/f'{engine.segment}_{engine.name}_{suffix}.jsonl.gz'
+            with gzip.open(derived_path, 'wt', encoding='utf-8') as target:
+                for record in records:
+                    target.write(json.dumps(record, separators=(',', ':')) + '\n')
 
-    midpoints.sort()
-    for result, fills in zip(results, completed_fills):
-        records = fill_markout_rows(fills, midpoints, interval_seconds)
-        result['fill_markouts'] = summarize_markouts(records)
-        result['fill_markouts_by_side_kind'] = markouts_by_side_kind(records)
-        filename = f"{result['segment']}_{result['name']}_fill_markouts.jsonl.gz"
-        result['fill_markouts_file'] = filename
-        with gzip.open(output/filename, 'wt', encoding='utf-8') as target:
-            for record in records:
-                target.write(json.dumps(record, separators=(',', ':')) + '\n')
-    if source_hashes(cases, experiment_file) != hashes:
-        raise ValueError('Source files changed during the replay; no completion result written')
+
+def _write_reports(output, results, start, end):
+    """Write human-readable summaries after replay and analysis complete."""
     with (output/'summary.csv').open('w', newline='', encoding='utf-8-sig') as target:
         fields = ['segment', 'name', 'gross_pnl', 'turnover', 'pnl_per_million',
                   'max_drawdown_liquidation_mtm', 'max_abs_position', 'terminal_position']
@@ -278,6 +222,70 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
         lines.append(f'| {result["segment"]} | {result["name"]} | {result["gross_pnl"]:,.2f} | '
                      f'{result["turnover"]:,.2f} | {rate} | {result["max_drawdown_liquidation_mtm"]:,.2f} |')
     (output/'REPORT.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
+
+
+async def run_backtest(data, output, cases, configs, experiment_file, start=None, end=None,
+                       split_at=(), progress=print, overwrite=False,
+                       data_file='market_rows.jsonl.gz', manifest_file='fetch_manifest.json'):
+    """Fresh bot/inventory per segment; behavior and parameters come from each case."""
+    data, output = Path(data), Path(output)
+    manifest = load_market_manifest(data, data_file, manifest_file)
+    start, end = _validate_run(manifest, start, end, split_at, cases, configs)
+    interval_seconds = manifest['interval_seconds']
+    hashes = source_hashes(cases, experiment_file)
+    protected = [data, data/data_file, data/manifest_file, Path.cwd(), Path(__file__).parent, experiment_file]
+    protected.extend(p for case in cases for p in case.code_files)
+    prepare_output(output, overwrite, protected)
+    boundaries = [start, *split_at, end]
+    engines, midpoints, segment_index = [], [], -1
+    completed_runs = []
+
+    with ExitStack() as contexts:
+        contexts.enter_context(sequential_asyncio(
+            module for case in cases for module in case.asyncio_modules))
+        # Only external clocks are rebound. Indicator and order rules stay in the bot.
+        for case in cases:
+            contexts.enter_context(case.clock_context())
+        try:
+            for row in iter_market_rows(data, start, end, data_file):
+                second = row['second']
+                midpoints.append((row['timestamp'], (row['bid'] + row['ask']) / 2))
+                while segment_index < 0 or second >= boundaries[segment_index + 1]:
+                    if engines:
+                        await _finish_segment(engines, output, completed_runs)
+                    segment_index += 1
+                    engines = []
+                    for case in cases:
+                        for config in configs:
+                            name = f'{case.name}_{config.model}_{config.latency:g}s'
+                            engine = ReplayEngine(case.create_bot(), config, boundaries[segment_index],
+                                                  boundaries[segment_index + 1],
+                                                  f'segment_{segment_index + 1:03}', name,
+                                                  case.strategy_factory, interval_seconds)
+                            engines.append((engine, case))
+                            await engine.launch()
+                for engine, case in engines:
+                    await engine.tick(row)
+                if (second + interval_seconds - start) % 3600 == 0:
+                    progress(f'Replayed {iso(second+interval_seconds)} ({len(engines)} cases/models)')
+            await _finish_segment(engines, output, completed_runs)
+        finally:
+            await asyncio.gather(*(engine.stop() for engine, case in engines), return_exceptions=True)
+
+    midpoints.sort()
+    for result, fills in completed_runs:
+        records = fill_markout_rows(fills, midpoints, interval_seconds)
+        result['fill_markouts'] = summarize_markouts(records)
+        result['fill_markouts_by_side_kind'] = markouts_by_side_kind(records)
+        filename = f"{result['segment']}_{result['name']}_fill_markouts.jsonl.gz"
+        result['fill_markouts_file'] = filename
+        with gzip.open(output/filename, 'wt', encoding='utf-8') as target:
+            for record in records:
+                target.write(json.dumps(record, separators=(',', ':')) + '\n')
+    if source_hashes(cases, experiment_file) != hashes:
+        raise ValueError('Source files changed during the replay; no completion result written')
+    results = [result for result, fills in completed_runs]
+    _write_reports(output, results, start, end)
     # Written last: its presence marks a successfully completed run.
     bundle = dict(input_manifest=manifest, input_raw_sha256=manifest['raw_sha256'],
                   input_data_file=str(data_file), input_manifest_file=str(manifest_file),

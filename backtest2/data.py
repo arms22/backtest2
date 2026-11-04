@@ -26,7 +26,7 @@ def file_hash(path):
     return digest.hexdigest()
 
 
-def get_interval_seconds(directory, manifest, data_file='market_rows.jsonl.gz'):
+def get_interval_seconds(directory, data_file='market_rows.jsonl.gz'):
     """Read the first two timestamps to infer a fixed whole-second interval."""
     with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
         try:
@@ -60,10 +60,10 @@ def load_market_manifest(directory, data_file='market_rows.jsonl.gz', manifest_f
         raise ValueError('Invalid market-data period')
     # Normalize in memory for runner/plot consumers; never rewrite the source manifest.
     return dict(manifest, raw_sha256=expected_hash,
-                interval_seconds=get_interval_seconds(directory, manifest, data_file))
+                interval_seconds=get_interval_seconds(directory, data_file))
 
 
-def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz', interval_seconds=1):
+def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
     """Decode stored market data without row-level validation."""
     with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
         for line in source:
