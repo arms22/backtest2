@@ -1,5 +1,6 @@
 """Run bot-defined cases through the common offline replay engine."""
 import asyncio
+import bisect
 import csv
 import gzip
 import json
@@ -42,31 +43,66 @@ def source_hashes(cases, experiment_file):
 
 
 
-def markouts(fills, midpoints, interval_seconds=1):
+def markout_horizons(interval_seconds):
+    """Choose useful markout horizons from the inferred market-data interval."""
+    unit = 1 if interval_seconds < 60 else 60 if interval_seconds < 3600 else 3600
+    return sorted({interval_seconds, *(value * unit for value in (1, 5, 30, 60))})
+
+
+def fill_markout_rows(fills, observations, interval_seconds):
+    horizons = markout_horizons(interval_seconds)
+    records = []
+    for fill in fills:
+        if fill['kind'] == 'terminal':
+            continue
+        markouts = {}
+        for horizon in horizons:
+            target_time = fill['t'] + horizon
+            index = bisect.bisect_left(observations, (target_time, -math.inf))
+            if index == len(observations):
+                markouts[str(horizon)] = dict(
+                    target_time=target_time, observed_time=None,
+                    actual_horizon_seconds=None, mid_price=None,
+                    yen_per_btc=None, markout_yen=None, status='censored')
+                continue
+            observed_time, future = observations[index]
+            sign = 1 if fill['side'] == 'BUY' else -1
+            change = sign * (future - fill['price'])
+            markouts[str(horizon)] = dict(
+                target_time=target_time, observed_time=observed_time,
+                actual_horizon_seconds=observed_time - fill['t'],
+                mid_price=future, yen_per_btc=change,
+                markout_yen=change * fill['size'], status='observed')
+        records.append(dict(
+            fill_id=fill['fill_id'], t=fill['t'], side=fill['side'],
+            kind=fill['kind'], price=fill['price'], size=fill['size'],
+            order=fill['order'], realized_pnl=fill['realized_pnl'],
+            markouts=markouts))
+    return records
+
+
+def summarize_markouts(records):
     result = {}
-    latest_time = max(midpoints) if midpoints else None
-    for horizon in sorted({1, 5, 30, 60, interval_seconds}):
+    horizons = sorted({int(horizon) for record in records
+                       for horizon in record['markouts']})
+    for horizon in horizons:
         changes, volume = [], 0.
         eligible_count = missing_count = censored_count = 0
         eligible_volume = missing_volume = censored_volume = 0.
-        for fill in fills:
-            if fill['kind'] == 'terminal':
-                continue
-            target_time = math.floor(fill['t']) + horizon
-            if latest_time is None or target_time > latest_time:
+        for record in records:
+            fill_markout = record['markouts'][str(horizon)]
+            if fill_markout['status'] == 'censored':
                 censored_count += 1
-                censored_volume += fill['size']
+                censored_volume += record['size']
                 continue
             eligible_count += 1
-            eligible_volume += fill['size']
-            future = midpoints.get(target_time)
-            if future is None:
+            eligible_volume += record['size']
+            if fill_markout['status'] == 'missing':
                 missing_count += 1
-                missing_volume += fill['size']
+                missing_volume += record['size']
                 continue
-            sign = 1 if fill['side'] == 'BUY' else -1
-            changes.append(sign * (future - fill['price']) * fill['size'])
-            volume += fill['size']
+            changes.append(fill_markout['markout_yen'])
+            volume += record['size']
         markout_yen = math.fsum(changes)
         result[str(horizon)] = dict(
             count=len(changes), volume=volume,
@@ -81,14 +117,12 @@ def markouts(fills, midpoints, interval_seconds=1):
     return result
 
 
-def markouts_by_side_kind(fills, midpoints, interval_seconds=1):
+def markouts_by_side_kind(records):
     groups = {}
-    for fill in fills:
-        if fill['kind'] == 'terminal':
-            continue
-        key = f"{fill['side']}/{fill['kind']}"
-        groups.setdefault(key, []).append(fill)
-    return {key: markouts(group, midpoints, interval_seconds)
+    for record in records:
+        key = f"{record['side']}/{record['kind']}"
+        groups.setdefault(key, []).append(record)
+    return {key: summarize_markouts(group)
             for key, group in sorted(groups.items())}
 
 
@@ -138,7 +172,7 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     protected.extend(p for case in cases for p in case.code_files)
     prepare_output(output, overwrite, protected)
     boundaries = [start, *split_at, end]
-    results, engines, midpoints, segment_index = [], [], {}, -1
+    results, engines, midpoints, segment_index = [], [], [], -1
     completed_fills = []
 
     async def finish_segment():
@@ -180,7 +214,7 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
         try:
             for row in iter_market_rows(data, start, end, data_file, manifest['interval_seconds']):
                 second = row['second']
-                midpoints[second] = (row['bid'] + row['ask']) / 2
+                midpoints.append((row['timestamp'], (row['bid'] + row['ask']) / 2))
                 while segment_index < 0 or second >= boundaries[segment_index + 1]:
                     if engines:
                         await finish_segment()
@@ -203,10 +237,16 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
         finally:
             await asyncio.gather(*(engine.stop() for engine, case in engines), return_exceptions=True)
 
+    midpoints.sort()
     for result, fills in zip(results, completed_fills):
-        result['fill_markouts'] = markouts(fills, midpoints, interval_seconds)
-        result['fill_markouts_by_side_kind'] = markouts_by_side_kind(
-            fills, midpoints, interval_seconds)
+        records = fill_markout_rows(fills, midpoints, interval_seconds)
+        result['fill_markouts'] = summarize_markouts(records)
+        result['fill_markouts_by_side_kind'] = markouts_by_side_kind(records)
+        filename = f"{result['segment']}_{result['name']}_fill_markouts.jsonl.gz"
+        result['fill_markouts_file'] = filename
+        with gzip.open(output/filename, 'wt', encoding='utf-8') as target:
+            for record in records:
+                target.write(json.dumps(record, separators=(',', ':')) + '\n')
     if source_hashes(cases, experiment_file) != hashes:
         raise ValueError('Source files changed during the replay; no completion result written')
     with (output/'summary.csv').open('w', newline='', encoding='utf-8-sig') as target:
