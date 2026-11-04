@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from .analysis import match_fills_fifo, summarize_matches
 from .replay import ReplayEngine
 from .asyncio_support import sequential_asyncio
 from .data import file_hash, iso, iter_market_rows, load_market_manifest, parse_time
@@ -43,18 +44,52 @@ def source_hashes(cases, experiment_file):
 
 def markouts(fills, midpoints, interval_seconds=1):
     result = {}
+    latest_time = max(midpoints) if midpoints else None
     for horizon in sorted({1, 5, 30, 60, interval_seconds}):
         changes, volume = [], 0.
+        eligible_count = missing_count = censored_count = 0
+        eligible_volume = missing_volume = censored_volume = 0.
         for fill in fills:
-            future = midpoints.get(math.floor(fill['t']) + horizon)
-            if future is None or fill['kind'] == 'terminal':
+            if fill['kind'] == 'terminal':
+                continue
+            target_time = math.floor(fill['t']) + horizon
+            if latest_time is None or target_time > latest_time:
+                censored_count += 1
+                censored_volume += fill['size']
+                continue
+            eligible_count += 1
+            eligible_volume += fill['size']
+            future = midpoints.get(target_time)
+            if future is None:
+                missing_count += 1
+                missing_volume += fill['size']
                 continue
             sign = 1 if fill['side'] == 'BUY' else -1
             changes.append(sign * (future - fill['price']) * fill['size'])
             volume += fill['size']
-        result[str(horizon)] = dict(count=len(changes), volume=volume,
-                                    yen_per_btc=math.fsum(changes)/volume if volume else None)
+        markout_yen = math.fsum(changes)
+        result[str(horizon)] = dict(
+            count=len(changes), volume=volume,
+            yen_per_btc=markout_yen/volume if volume else None,
+            markout_yen=markout_yen,
+            eligible_count=eligible_count, observed_count=len(changes),
+            missing_count=missing_count, censored_count=censored_count,
+            missing_rate=missing_count/eligible_count if eligible_count else None,
+            eligible_volume=eligible_volume, observed_volume=volume,
+            missing_volume=missing_volume, censored_volume=censored_volume,
+        )
     return result
+
+
+def markouts_by_side_kind(fills, midpoints, interval_seconds=1):
+    groups = {}
+    for fill in fills:
+        if fill['kind'] == 'terminal':
+            continue
+        key = f"{fill['side']}/{fill['kind']}"
+        groups.setdefault(key, []).append(fill)
+    return {key: markouts(group, midpoints, interval_seconds)
+            for key, group in sorted(groups.items())}
 
 
 def prepare_output(output, overwrite=False, protected_paths=()):
@@ -111,12 +146,30 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
             result = await engine.finish()
             result['case'] = case.name
             result['bot_metadata'] = case.metadata
+            matches, open_lots = match_fills_fifo(engine.fills)
+            result['match_slice_count'] = len(matches)
+            result['match_realized_pnl'] = math.fsum(
+                match['gross_realized_pnl'] for match in matches)
+            result['open_lot_count_at_cutoff'] = len(open_lots)
+            result['open_quantity_at_cutoff'] = math.fsum(
+                lot['size'] for lot in open_lots)
+            assert math.isclose(result['match_realized_pnl'], result['gross_pnl'], abs_tol=1e-5)
+            assert math.isclose(math.fsum(match['turnover'] for match in matches),
+                                result['turnover'], abs_tol=1e-4)
+            assert math.isclose(result['open_quantity_at_cutoff'],
+                                abs(result['terminal_position']), abs_tol=1e-8)
+            result['fill_match_summary'] = summarize_matches(matches)
             completed_fills.append(engine.fills)
             results.append(result)
             path = output/f'{engine.segment}_{engine.name}_fills.jsonl.gz'
             with gzip.open(path, 'wt', encoding='utf-8') as target:
                 for fill in engine.fills:
                     target.write(json.dumps(fill, separators=(',', ':')) + '\n')
+            for suffix, records in (('matches', matches), ('open_lots', open_lots)):
+                derived_path = output/f'{engine.segment}_{engine.name}_{suffix}.jsonl.gz'
+                with gzip.open(derived_path, 'wt', encoding='utf-8') as target:
+                    for record in records:
+                        target.write(json.dumps(record, separators=(',', ':')) + '\n')
 
     with ExitStack() as contexts:
         contexts.enter_context(sequential_asyncio(
@@ -152,6 +205,8 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
 
     for result, fills in zip(results, completed_fills):
         result['fill_markouts'] = markouts(fills, midpoints, interval_seconds)
+        result['fill_markouts_by_side_kind'] = markouts_by_side_kind(
+            fills, midpoints, interval_seconds)
     if source_hashes(cases, experiment_file) != hashes:
         raise ValueError('Source files changed during the replay; no completion result written')
     with (output/'summary.csv').open('w', newline='', encoding='utf-8-sig') as target:
@@ -160,10 +215,22 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
         writer = csv.DictWriter(target, fieldnames=fields, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(results)
+    with (output/'match_summary.csv').open('w', newline='', encoding='utf-8-sig') as target:
+        fields = ['segment', 'name', 'group_by', 'group_key', 'match_count',
+                  'quantity', 'turnover', 'gross_realized_pnl', 'win_rate',
+                  'average_pnl_per_match', 'pnl_per_million_turnover']
+        writer = csv.DictWriter(target, fieldnames=fields, extrasaction='ignore')
+        writer.writeheader()
+        for result in results:
+            for row in result['fill_match_summary']:
+                writer.writerow(dict(segment=result['segment'], name=result['name'], **row))
     lines = ['# Backtest results\n',
              f'Period: {iso(start)} <= time < {iso(end)}\n',
              'PnL and drawdown in JPY; turnover includes both sides. Fees are zero; funding, '
              'rollover, actual API waits and subsecond queue dynamics are not modeled.\n',
+             'FIFO close slices and grouped realized PnL are in `*_matches.jsonl.gz` and '
+             '`match_summary.csv`. `*_open_lots.jsonl.gz` records inventory before terminal '
+             'liquidation.\n',
              '| Segment | Case | PnL | Turnover | PnL / 1M turnover | MTM drawdown |\n'
              '| --- | --- | ---: | ---: | ---: | ---: |']
     for result in results:

@@ -208,7 +208,8 @@ class ReplayEngine:
         order['executed_size'] = round(order['executed_size'] + quantity, 8)
         if order['remaining'] <= 0:
             order['state'] = 'filled'
-        self.fills.append(dict(t=timestamp, side=order['side'], size=quantity,
+        self.fills.append(dict(fill_id=len(self.fills) + 1,
+                               t=timestamp, side=order['side'], size=quantity,
                                price=price, kind=kind, order=order['id'],
                                realized_pnl=realized,
                                decision=order.get('decision', order['arrival'] - self.config.latency),
