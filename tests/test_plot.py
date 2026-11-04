@@ -1,11 +1,12 @@
 import gzip
+import importlib.util
 import json
 from pathlib import Path
 import tempfile
 import unittest
 
 from backtest2.data import file_hash, iso
-from backtest2.plot import load_pnl_series
+from backtest2.plot import load_pnl_series, plot_pnl
 
 
 class PnlTests(unittest.TestCase):
@@ -28,7 +29,7 @@ class PnlTests(unittest.TestCase):
                            trades=0, delay=0)
                 stream.write(json.dumps(row)+'\n')
         manifest = dict(raw_sha256=file_hash(raw), start_utc=iso(start),
-                        end_utc_exclusive=iso(end), product='TEST_JPY',
+                        end_utc_exclusive=iso(end),
                         missing_intervals_utc_seconds=[], invalid_rows=[])
         (self.directory/'fetch_manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
         results = []
@@ -80,6 +81,19 @@ class PnlTests(unittest.TestCase):
         self.write_bundle(bundle)
         with self.assertRaisesRegex(ValueError, 'Market data differs'):
             load_pnl_series(self.directory, self.directory)
+
+    @unittest.skipUnless(importlib.util.find_spec('matplotlib'), 'matplotlib is optional')
+    def test_plot_uses_default_or_custom_title(self):
+        bundle = self.save()
+        manifest = bundle['input_manifest']
+        manifest['output'] = {'sha256': manifest.pop('raw_sha256')}
+        (self.directory/'fetch_manifest.json').write_text(json.dumps(manifest), encoding='utf-8')
+        self.write_bundle(bundle)
+        for options, expected in (({}, 'Cumulative P&amp;L'),
+                                  ({'title': 'Custom experiment'}, 'Custom experiment')):
+            with self.subTest(options=options):
+                output = plot_pnl(self.directory, self.directory, **options)
+                self.assertIn(expected, output.read_text(encoding='utf-8'))
 
 
 if __name__ == '__main__':

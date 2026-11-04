@@ -21,7 +21,8 @@ def main():
     parser.add_argument('--start', help='Inclusive ISO timestamp with timezone')
     parser.add_argument('--end', help='Exclusive ISO timestamp with timezone')
     parser.add_argument('--split-at', action='append', default=[], help='Restart bot/inventory at this ISO timestamp')
-    parser.add_argument('--model', choices=('touch', 'through', 'queue_touch'), action='append')
+    parser.add_argument('--model', choices=('touch', 'through', 'queue_touch'), action='append',
+                        help='Fill model; defaults to queue_touch; repeat to compare models')
     parser.add_argument('--latency', type=float, default=1.)
     parser.add_argument('--cancel-latency', type=float, default=1.)
     parser.add_argument('--decision-offset', type=float, default=.9)
@@ -36,7 +37,7 @@ def main():
         cases = [case for case in cases if case.name in args.case]
     configs = [ReplayConfig(model=model, latency=args.latency, cancel_latency=args.cancel_latency,
                             decision_offset=args.decision_offset, warmup_seconds=args.warmup_seconds)
-               for model in (args.model or ['through'])]
+               for model in (args.model or [ReplayConfig().model])]
     result = asyncio.run(run_backtest(args.data, args.output, cases, configs, module.__file__,
                                       parse_time(args.start) if args.start else None,
                                       parse_time(args.end) if args.end else None,

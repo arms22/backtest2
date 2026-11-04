@@ -24,7 +24,7 @@ def vwap(book, quantity):
 
 @dataclass(frozen=True)
 class ReplayConfig:
-    model: str = 'through'
+    model: str = 'queue_touch'
     latency: float = 1.0
     cancel_latency: float = 1.0
     decision_offset: float = 0.9

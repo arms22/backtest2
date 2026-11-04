@@ -66,7 +66,8 @@ def load_pnl_series(data, results, cases=(), models=()):
     return bundle, list(curves.values())
 
 
-def plot_pnl(data, results, output=None, cases=(), models=(), utc_offset=0):
+def plot_pnl(data, results, output=None, cases=(), models=(), utc_offset=0,
+             title='Cumulative P&L'):
     """Save a P&L figure (SVG by default); matplotlib is an optional dependency."""
     import matplotlib
     matplotlib.use('Agg')
@@ -84,8 +85,7 @@ def plot_pnl(data, results, output=None, cases=(), models=(), utc_offset=0):
         fig, axes = plt.subplots(len(panels), 1, figsize=(14, 4.8*len(panels)),
                                  squeeze=False, sharex=True, layout='constrained')
         try:
-            product = bundle['input_manifest']['product']
-            fig.suptitle(f'{product} — cumulative P&L', fontsize=17, fontweight='bold')
+            fig.suptitle(title, fontsize=17, fontweight='bold')
             for model, ax in zip(panels, axes[:, 0]):
                 for curve in (c for c in curves if c['model'] == model):
                     times = [datetime.fromtimestamp(t, zone) for t in curve['times']]
@@ -122,9 +122,11 @@ def main():
     parser.add_argument('--case', action='append', default=[], help='Case filter; repeatable')
     parser.add_argument('--model', action='append', default=[], help='Model filter; repeatable')
     parser.add_argument('--utc-offset', type=float, default=0, help='Display time offset; JST is 9')
+    parser.add_argument('--title', default='Cumulative P&L', help='Figure title; default: Cumulative P&L')
     args = parser.parse_args()
     try:
-        output = plot_pnl(args.data, args.results, args.output, args.case, args.model, args.utc_offset)
+        output = plot_pnl(args.data, args.results, args.output, args.case, args.model, args.utc_offset,
+                          title=args.title)
     except (OSError, ValueError) as error:
         parser.error(str(error))
     print(f'Saved P&L plot to {output}')

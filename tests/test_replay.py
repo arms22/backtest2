@@ -175,6 +175,13 @@ class AccountingTests(unittest.TestCase):
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_default_model_accounts_for_visible_queue(self):
+        engine = ReplayEngine(PassiveBot(), ReplayConfig(), 0, 100, 'test', 'test', Adapter)
+        engine.now, engine.row = 1., market(1)
+        order = engine.submit_order('BUY', .004, 100.)
+        engine.market_update(market(5, bids=[[100., .005]], sell_volume=.006))
+        self.assertAlmostEqual(order['executed_size'], .001)
+
     def test_negative_latency_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Latency must be nonnegative'):
             ReplayConfig(latency=-1)
