@@ -1,94 +1,116 @@
 # backtest2
 
-取引ボットから独立した、保存済み市場データの再生ライブラリ。外部依存はなく、Python 3.10以上で動作する。取引所への通信処理は持たない。
+`backtest2` は、保存済み市場データを再生して取引ボットを検証するライブラリです。ボットや取引所への通信処理を含まず、Python 3.10 以上で動作します。各取引所のリポジトリから接続先を渡し、共通エンジンで約定と損益を計算します。
 
-## 分担
+## 使い始める
 
-| 配置 | 担当 |
-| --- | --- |
-| `backtest2/data.py` | 保存データ、ハッシュ・欠損・板・OHLCの検査 |
-| `backtest2/replay.py` | 仮想時計、GTC指値の約定・取消、終端決済、リスク集計 |
-| `backtest2/accounting.py` | 初期建玉0・手数料0のFIFO損益 |
-| `backtest2/runner.py` | ボット生成と接続先の受取、ケース比較、期間分割、結果出力 |
-| `backtest2/audit.py` | 保存台帳と元の板による独立再計算 |
-| `backtest2/plot.py` | 保存台帳と板から損益推移を再計算し、SVGなどへ描画 |
-| 各リポジトリの `backtest.py` | 本番Strategyの注文・取消と、取引所固有の注文情報・残高の接続 |
-| 各リポジトリの `backtests/` | ボット生成、設定、時計の接続、参照ソースの指定 |
-
-このパッケージからfirebots・bankbotsなどをimportしない。ボットの指標、深さ、数量、建玉制御は各ボットに残す。
-
-## 利用
-
-各ボットのリポジトリから、隣接するこのディレクトリをローカル依存として参照する。firebotsとbankbotsには任意の `backtest` extraを設定している。通常の実行環境に追加する場合は、各リポジトリのルートで実行する。
+各ボットのリポジトリから、隣接する `backtest2` ディレクトリをローカル依存として参照します。firebots と bankbots では任意の `backtest` extra を使います。各リポジトリのルートで実行してください。
 
 ```powershell
 uv sync --extra backtest
 uv run --extra backtest python -m backtest2 --help
 ```
 
-`--experiment` で指定したモジュールの `build_cases()` から `BotCase` のリストを受け取る。必須項目は `name`、`create_bot`、`strategy_factory`。接続先はエンジンから生成し、通常のボットへStrategyとして渡す。時計の差替えと参照ソースは、ケースの `clock_context` と `code_files` で指定する。`asyncio_modules=(bot_module, strategy_module)` を指定すると、共通ランナーが再生中だけ各モジュールの `asyncio` 参照を差し替え、`gather` を逐次実行する。指定しないケースは通常の並列実行となる。共有の `asyncio` 自体は変更せず、再生終了時には参照を元に戻す。対象は `import asyncio` 形式の参照であり、`from asyncio import gather` には適用されない。
+実行には、保存データ、実験モジュール、出力先を指定します。`--experiment` には `build_cases()` を持つモジュールを指定します。モデルの既定値は `through` です。
 
-接続先が実装する通知は `on_fill(order, quantity, price, kind)` と `on_market_update()` の2つ。前者は共通台帳の更新後、後者は各秒の約定・取消処理の完了後に呼ぶ。接続先は本番形式の注文情報・残高へ反映する。新規・取消はエンジンの `submit_order()`・`cancel_order()` を使用する。対応例は `../firebots/firebots/backtest.py` と `../bankbots/bankbots/backtest.py`。
+```powershell
+uv run --extra backtest python -m backtest2 `
+  --experiment backtests.cfdmm `
+  --data <保存データ> `
+  --output <結果ディレクトリ>
+```
 
-入力は `fetch_manifest.json` と `market_rows.jsonl.gz`。1商品・一定間隔の板、OHLC、売買方向別数量・件数を使用する。間隔はデータ行の先頭2行の時刻を秒単位に切り下げ、その差から求める。manifestの `interval_seconds` は間隔の判定には使用しない。1秒、5秒、1分、1時間などの整数秒間隔に対応し、期間と分割境界はその間隔にそろえる。既存のfirebots用保存形式を引き継いでいる。取得処理はこのライブラリに含めない。
+## ボットとの接続
 
-共通処理が参照する保存行の列は次のとおり。対象Bot・アダプターが追加で参照する列は各実装で確認する。
+`build_cases()` は `BotCase` のリストを返します。必須項目は `name`、`create_bot`、`strategy_factory` です。エンジンが接続先を生成し、通常のボットへ Strategy として渡します。時計の差し替えと参照ソースは `clock_context` と `code_files` で指定します。
+
+`asyncio_modules=(bot_module, strategy_module)` を指定すると、共通ランナーは再生中だけ対象モジュールの `asyncio` 参照を差し替え、`gather` を逐次実行します。指定しないケースは通常の並列実行です。共有の `asyncio` 自体は変更せず、再生終了時に各参照を元へ戻します。対象は `import asyncio` 形式の参照です。`from asyncio import gather` 形式には適用されません。
+
+接続先は次の通知を実装します。
+
+- `on_fill(order, quantity, price, kind)`: 共通台帳を更新した後に呼びます。
+- `on_market_update()`: 各秒の約定・取消処理が終わった後に呼びます。
+
+接続先は本番形式の注文情報と残高へ反映します。新規注文と取消にはエンジンの `submit_order()` と `cancel_order()` を使います。実装例は `../firebots/firebots/backtest.py` と `../bankbots/bankbots/backtest.py` です。
+
+ボット固有の指標、板の深さ、注文数量、建玉制御は各ボット側に置きます。共通パッケージから firebots や bankbots を import しません。
+
+## 入力データ
+
+入力ディレクトリには `fetch_manifest.json` と `market_rows.jsonl.gz` を置きます。既存の firebots 用保存形式を引き継いでいます。取得処理は含みません。入力はあらかじめ単一商品に絞り込んでください。共通エンジンは商品識別子を扱わず、manifest の `product` や行の `product_code` を要求・参照しません。識別子はケース定義から `strategy_factory` に渡し、取引所アダプターが管理します。
+
+共通処理が参照する保存行の列は次のとおりです。対象ボットやアダプターが追加で参照する列は、それぞれの実装で確認してください。
 
 | 保存列 | 形式・用途 |
 | --- | --- |
-| `time` | タイムゾーン付きISO日時文字列。再生時刻とデータ間隔の算出 |
-| `bids_raw`, `asks_raw` | `[価格, 数量]`の配列を格納したJSON文字列。買い板は価格降順、売り板は価格昇順。板参照、約定処理、清算評価、監査・描画 |
-| `bid`, `ask` | 最良買い・売り価格の数値。Runnerの中間価格とマークアウトの計算 |
-| `low`, `high` | 区間の安値・高値の数値。約定判定 |
-| `buy_volume`, `sell_volume` | 区間の売買方向別数量の数値。約定可能数量の計算 |
-| `trades` | 区間の約定件数の数値。約定判定 |
-| `buy_count`, `sell_count` | 区間の売買方向別件数の数値。共通の`Executions.get_data()`を使用する場合に参照 |
+| `time` | タイムゾーン付きISO日時文字列。再生時刻とデータ間隔の算出に使います。 |
+| `bids_raw`, `asks_raw` | `[価格, 数量]` 配列のJSON文字列。買い板は価格降順、売り板は価格昇順です。板参照、約定処理、清算評価、監査、描画に使います。 |
+| `bid`, `ask` | 最良買い・売り価格の数値。中間価格とマークアウトの計算に使います。 |
+| `low`, `high` | 区間の安値・高値。約定判定に使います。 |
+| `buy_volume`, `sell_volume` | 区間の売買方向別数量。約定可能数量の計算に使います。 |
+| `trades` | 区間の約定件数。約定判定に使います。 |
+| `buy_count`, `sell_count` | 区間の売買方向別件数。共通の `Executions.get_data()` を使う場合に参照します。 |
 
-`bids`・`asks`は保存された板のJSON文字列を読み込み時に展開して生成する。`timestamp`は`time`から得たUNIX秒、`second`はその秒未満を切り下げた値であり、いずれも保存データへの追加は不要。上表は共通処理の参照列であり、全Botに必要な列や入力品質の検査項目を網羅するものではない。
+読み込み時に `bids_raw` と `asks_raw` を展開して `bids` と `asks` を生成します。`timestamp` は `time` から得たUNIX秒、`second` はその秒未満を切り下げた値です。これらを入力ファイルへ追加する必要はありません。
 
-ファイル名を変える場合は `--data-file quotes.jsonl.gz --manifest-file source.json` を指定する。パスは `--data` からの相対パス、または絶対パスで指定できる。Python APIでは `run_backtest(..., data_file=..., manifest_file=...)` を使う。指定したパスを結果に保存するため、監査と描画も同じファイルを読む。相対パスを使えば、データディレクトリ全体を移動しても参照を維持できる。
+データ間隔は、データ行の先頭2行の時刻を秒単位に切り下げ、その差から求めます。manifest の `interval_seconds` は間隔の判定に使いません。1秒、5秒、1分、1時間など整数秒の間隔に対応し、再生期間と分割境界はデータ間隔にそろえます。
 
-共通エンジンは商品・ペアの識別子を扱わず、manifestの `product` や行の `product_code` を要求・参照しない。識別子はボット側のケース定義で `strategy_factory` に渡し、取引所アダプターが管理する。入力はあらかじめ単一商品へ絞り込む。
+共通処理は manifest の `raw_sha256` を使い、未指定または `null` の場合は `output.sha256` を使います。`missing_intervals_utc_seconds` と `invalid_rows` は省略できます。manifest に欠損区間または不正行が記録されている場合、入力を拒否します。各行の欠落・重複・時刻順序や末尾不足、板・OHLC・約定集計の値域や相互整合は検査しません。元のmanifestは書き換えません。
 
-データのSHA256はmanifestの `raw_sha256` を使い、未指定またはnullの場合は `output.sha256` を使う。`missing_intervals_utc_seconds` と `invalid_rows` は省略できる。manifestに欠損区間や不正行が記録されていれば入力を拒否する。再生中は必要な板データをJSONから展開する。各行の欠落・重複・時刻順序や末尾不足、板・OHLC・約定集計の値域や相互整合は検査しない。元のmanifestは書き換えない。
-
-ソースの記録はパッケージ内のPythonファイル、実験ファイル、`code_files` が対象。ハッシュのキーは全参照ファイルの共通祖先からの相対パスであり、複数リポジトリを参照できる。参照ソースはケース側で明示する。
-
-## 現在の範囲
-
-単一のJPY建て商品、初期建玉0、GTC指値、手数料0の再生に絞っている。現物の初期現金・残高制約・post-onlyの指定は取引所側の接続先が扱う。GMOの両建て・決済専用注文、成行、IOC/FOK、資金調達費、証拠金・ロスカットは未対応。未対応の注文方式は接続先で明示的に拒否する。
-
-`wakeup()` は次の市場データレコードへ進める。整数秒周期には `wakeup_every_seconds(interval)` を使う。各判断の秒内時刻は `decision_offset` で指定する。`sleep(seconds)` は期限以後の最初の保存レコードまで進むため、細かな待機もデータ間隔の粒度へ切り上がる。サブ秒のイベント順序は再現しない。
-
-touch・through・queue_touchの3モデルを持つ。方向別出来高と板数量を注文間で共有する。post-only注文が到着時の板を跨ぐ場合は拒否する。取消完了が集計区間内なら、その区間での約定を許す。3モデルを損益の上下限とは扱わない。実際の待ち順・API障害・通知遅延は未再現。
-
-出力先が既存なら停止する。同じ出力先で再実行するときは `--overwrite` を指定する。この場合は出力先ディレクトリ全体を削除して作り直すため、以前のグラフや監査結果、独自に追加したファイルも消える。入力データ、作業ディレクトリ、参照ソースを含む場所や、リンクされたディレクトリは上書きできない。
-
-`results.json` は完了時だけ作る。約定台帳、CSV、Markdownも保存する。マークアウトは1・5・30・60秒後とデータ間隔後の価格を集計する。該当時刻のレコードがなければ対象外とし、別の時刻の価格で補わない。独立監査は次の入口を使う。assertで照合するため、`python -O` は使わない。
+共通処理が使うファイル名を変更する場合は、`--data` からの相対パスまたは絶対パスを指定します。
 
 ```powershell
-uv run --extra backtest python -m backtest2.audit --data <保存データ> --results <結果>
+--data-file quotes.jsonl.gz --manifest-file source.json
+```
+
+Python API では `run_backtest(..., data_file=..., manifest_file=...)` を使います。指定したパスは結果に記録され、監査と描画も同じファイルを読みます。相対パスならデータディレクトリ全体を移動しても参照を維持できます。
+
+参照ソースとして、パッケージ内のPythonファイル、実験ファイル、各ケースの `code_files` を記録します。ハッシュのキーは、参照ファイルすべての共通祖先からの相対パスです。複数リポジトリのファイルも指定できます。
+
+## 再生モデルと制約
+
+再生範囲は単一のJPY建て商品、初期建玉0、GTC指値、手数料0です。初期現金・残高制約・post-onlyの指定は取引所側の接続先が扱います。GMOの両建て・決済専用注文、成行、IOC/FOK、資金調達費、証拠金、ロスカットには対応しません。未対応の注文方式は接続先で明示的に拒否してください。
+
+`wakeup()` は次の市場データレコードへ進みます。整数秒周期には `wakeup_every_seconds(interval)` を使います。各判断の秒内時刻は `decision_offset` で指定します。`sleep(seconds)` は指定時間以後の最初の保存レコードまで進むため、待機時間はデータ間隔の粒度に切り上がります。サブ秒のイベント順序は再現しません。
+
+約定モデルは `touch`、`through`、`queue_touch` の3種類です。方向別出来高と板数量は注文間で共有します。post-only 注文が到着時の板を跨ぐ場合は拒否します。取消完了が集計区間内なら、その区間での約定を許します。3モデルを損益の上下限とはみなしません。実際の待ち順、API障害、通知遅延は再現しません。
+
+## 結果と独立監査
+
+結果ディレクトリには約定台帳、CSV、Markdownレポートを保存します。`results.json` は正常終了時に最後に作成され、完了した実行を示します。マークアウトは1、5、30、60秒後とデータ間隔後の価格を集計します。該当時刻にレコードがない場合は集計対象外とし、別時刻の価格で補いません。
+
+出力先がすでに存在する場合、実行は停止します。置き換えるには `--overwrite` を指定します。出力先ディレクトリ全体を削除して作り直すため、以前のグラフ、監査結果、独自ファイルも削除されます。入力データ、作業ディレクトリ、参照ソースを含む場所や、リンクされたディレクトリは上書きできません。
+
+独立監査は、保存台帳と元の板から結果を再計算します。assertで照合するため、`python -O` を使わないでください。
+
+```powershell
+uv run --extra backtest python -m backtest2.audit `
+  --data <保存データ> `
+  --results <結果ディレクトリ>
 ```
 
 ## 損益グラフ
 
-完了した結果の `results.json`、約定台帳、元の保存データから描画する。ボットの再実行やデータの再取得は行わない。描画時だけmatplotlibが必要になる。各ボットのリポジトリから実行する例:
+グラフは完了済みの `results.json`、約定台帳、元の保存データから描画します。ボットの再実行やデータの再取得は行いません。描画時のみ `matplotlib` が必要です。各ボットのリポジトリから実行してください。
 
 ```powershell
-uv run --extra backtest --with matplotlib python -m backtest2.plot --data <保存データ> --results <結果> --utc-offset 9
+uv run --extra backtest --with matplotlib python -m backtest2.plot `
+  --data <保存データ> `
+  --results <結果ディレクトリ> `
+  --utc-offset 9
 ```
 
-既定の出力先は `<結果>/pnl.svg`。`--output <ファイル.png>` などで形式と出力先を変更できる。`--case <ケース名>` と `--model <モデル名>` は複数指定でき、省略時は全ケース・全モデルを描画する。モデルごとにパネルを分け、凡例に最終損益を表示する。時刻は既定でUTC、日本時間は `--utc-offset 9` を指定する。
+既定の出力先は `<結果ディレクトリ>/pnl.svg` です。`--output <ファイル.png>` のように指定すると、形式と出力先を変更できます。`--case <ケース名>` と `--model <モデル名>` は複数指定でき、省略時はすべてのケースとモデルを描画します。モデルごとにパネルを分け、凡例に最終損益を表示します。時刻は既定でUTCです。日本時間を表示するには `--utc-offset 9` を指定します。
 
-縦軸は現金増減に未決済建玉の清算価値を加えたJPY損益。各バーの板で評価する。粗い間隔ではバー内の価格・注文順序を復元できず、約定モデルは集計OHLCVに基づく近似となる。入力ハッシュと各区間の最終損益・建玉を保存結果と照合する。独立して再生した区間は前区間の最終損益を加算してつなぐ。
+縦軸は現金増減に未決済建玉の清算価値を加えたJPY損益です。各バーの板で評価します。粗い間隔ではバー内の価格や注文順序を復元できず、約定モデルは集計OHLCVに基づく近似になります。描画時には入力ハッシュと各区間の最終損益・建玉を保存結果と照合します。独立して再生した区間は、前区間の最終損益を加算してつなぎます。
 
-## 開発確認
+## 開発時の確認
 
-このリポジトリのルートで実行する。テストは模擬データだけを使う。
-
-uvのキャッシュ先は `pyproject.toml` の `[tool.uv]` で `.cache/uv` に設定しているため、`UV_CACHE_DIR` の指定は不要。`PYTHONPYCACHEPREFIX` は指定せず、Python標準の `__pycache__/` を使う。キャッシュは `.gitignore` で除外する。
+backtest2 リポジトリのルートで実行します。テストは模擬データだけを使います。
 
 ```powershell
 uv run python -m unittest discover -s tests -v
 uv run python -m compileall -q backtest2
 ```
+
+uv のキャッシュ先は `pyproject.toml` の `[tool.uv]` で `.cache/uv` に設定済みです。`UV_CACHE_DIR` を指定する必要はありません。`PYTHONPYCACHEPREFIX` は指定せず、Python標準の `__pycache__/` を使います。キャッシュは `.gitignore` で除外しています。
