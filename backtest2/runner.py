@@ -195,7 +195,9 @@ def _write_reports(output, results, start, end):
     """Write human-readable summaries after replay and analysis complete."""
     with (output/'summary.csv').open('w', newline='', encoding='utf-8-sig') as target:
         fields = ['segment', 'name', 'gross_pnl', 'turnover', 'pnl_per_million',
-                  'max_drawdown_liquidation_mtm', 'max_abs_position', 'terminal_position']
+                  'max_drawdown_liquidation_mtm', 'max_abs_position', 'terminal_position',
+                  'buy_orders', 'buy_filled_orders', 'buy_fill_rate',
+                  'sell_orders', 'sell_filled_orders', 'sell_fill_rate']
         writer = csv.DictWriter(target, fieldnames=fields, extrasaction='ignore')
         writer.writeheader()
         writer.writerows(results)
@@ -221,6 +223,17 @@ def _write_reports(output, results, start, end):
         rate = f'{result["pnl_per_million"]:,.2f}' if result['pnl_per_million'] is not None else 'N/A'
         lines.append(f'| {result["segment"]} | {result["name"]} | {result["gross_pnl"]:,.2f} | '
                      f'{result["turnover"]:,.2f} | {rate} | {result["max_drawdown_liquidation_mtm"]:,.2f} |')
+    lines.extend(['', 'Order fill rate counts each order with any fill once, including partial fills. '
+                  'Submitted orders include rejections and cancellations; terminal liquidation is excluded. '
+                  'No submitted orders means N/A.', '',
+                  '| Segment | Case | Side | Orders | Filled orders | Fill rate |',
+                  '| --- | --- | --- | ---: | ---: | ---: |'])
+    for result in results:
+        for side in ('buy', 'sell'):
+            value = result[side + '_fill_rate']
+            rate = f'{value:.2%}' if value is not None else 'N/A'
+            lines.append(f'| {result["segment"]} | {result["name"]} | {side.upper()} | '
+                         f'{result[side + "_orders"]} | {result[side + "_filled_orders"]} | {rate} |')
     (output/'REPORT.md').write_text('\n'.join(lines)+'\n', encoding='utf-8')
 
 

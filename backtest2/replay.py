@@ -176,6 +176,7 @@ class ReplayEngine:
                      cancel_done=math.inf, queue=None, activated=False, post_only=post_only)
         self.orders.append(order)
         self.counts['new_orders'] += 1
+        self.counts[side.lower() + '_orders'] += 1
         self.requests.append((self.now, 'new'))
         return order
 
@@ -189,6 +190,8 @@ class ReplayEngine:
         quantity = round(quantity, 8)
         if quantity <= 0:
             return
+        if kind != 'terminal' and order['executed_size'] == 0:
+            self.counts[order['side'].lower() + '_filled_orders'] += 1
         sign = 1 if order['side'] == 'BUY' else -1
         before_position = self.position
         fifo_position = self.account
@@ -399,7 +402,15 @@ class ReplayEngine:
                 while new_times and new_times[0] <= timestamp - 300:
                     new_times.popleft()
                 peak_new = max(peak_new, len(new_times))
+        order_stats = {}
+        for side in ('buy', 'sell'):
+            submitted = self.counts[side + '_orders']
+            filled = self.counts[side + '_filled_orders']
+            order_stats.update({side + '_orders': submitted,
+                                side + '_filled_orders': filled,
+                                side + '_fill_rate': filled / submitted if submitted else None})
         return dict(name=self.name, segment=self.segment, config=asdict(self.config),
+                    **order_stats,
                     gross_pnl=self.cash, turnover=self.turnover, fees=0.,
                     pnl_per_million=(self.cash / self.turnover * 1e6 if self.turnover else None),
                     fee_sensitivity={str(bp): self.cash - self.turnover * bp / 10000

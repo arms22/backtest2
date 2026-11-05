@@ -26,6 +26,32 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(low['executed_size'], .002)
         self.assertAlmostEqual(self.engine.position, .006)
 
+    async def test_order_fill_rates_count_orders_not_fill_events(self):
+        order = self.place(size=.01)
+        self.engine.submit_order('BUY', .001, 80.)
+        self.engine.submit_order('SELL', .001, 80., post_only=True)
+        cancelled = self.engine.submit_order('SELL', .001, 130.)
+        self.engine.cancel_order(cancelled)
+        await self.engine.tick(market(5))
+        await self.engine.tick(market(6))
+        self.assertEqual(order['executed_size'], .01)
+        result = await self.engine.finish()
+        self.assertEqual(result['buy_orders'], 2)
+        self.assertEqual(result['buy_filled_orders'], 1)
+        self.assertEqual(result['buy_fill_rate'], .5)
+        self.assertEqual(result['sell_orders'], 2)
+        self.assertEqual(result['sell_filled_orders'], 0)
+        self.assertEqual(result['sell_fill_rate'], 0.)
+        self.assertEqual(result['counts']['maker_fills'], 2)
+
+    async def test_order_fill_rates_without_orders_are_undefined(self):
+        await self.engine.tick(market(1))
+        result = await self.engine.finish()
+        for side in ('buy', 'sell'):
+            self.assertEqual(result[side + '_orders'], 0)
+            self.assertEqual(result[side + '_filled_orders'], 0)
+            self.assertIsNone(result[side + '_fill_rate'])
+
     async def test_post_only_rejects_crossing_at_arrival(self):
         order = self.place(price=120., post_only=True)
         await self.engine.tick(market(5))
