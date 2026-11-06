@@ -1,6 +1,11 @@
 import asyncio
+import gzip
+import json
+from pathlib import Path
+import tempfile
 import unittest
 
+from backtest2.data import iter_market_rows
 from backtest2.accounting import Position
 from backtest2.replay import (ACTIVE, Executions, MarketBoard, ReplayConfig, ReplayEngine, sleep,
                              wakeup_every_seconds)
@@ -18,6 +23,35 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
     def place(self, price=100., size=.004, **kwargs):
         self.engine.now, self.engine.row = 1., market(1)
         return self.engine.submit_order('BUY', size, price, **kwargs)
+
+    async def test_market_data_preserves_saved_columns_and_isolates_changes(self):
+        sources = []
+        for second in (1, 2):
+            row = market(second)
+            for key in ('second', 'timestamp'):
+                del row[key]
+            row['time'] = f'1970-01-01T00:00:0{second}Z'
+            row['bids_raw'] = json.dumps(row.pop('bids'))
+            row['asks_raw'] = json.dumps(row.pop('asks'))
+            row['exchange_extra'] = {'values': [second], 'optional': None}
+            sources.append(row)
+        with self.assertRaisesRegex(RuntimeError, 'No market data yet'):
+            self.engine.get_market_data()
+        with tempfile.TemporaryDirectory() as directory:
+            with gzip.open(Path(directory)/'market_rows.jsonl.gz', 'wt', encoding='utf-8') as target:
+                for row in sources:
+                    target.write(json.dumps(row) + '\n')
+            rows = iter_market_rows(directory, 0, 100)
+            await self.engine.tick(next(rows))
+            data = self.engine.get_market_data()
+            self.assertEqual(data, sources[0])
+            data['exchange_extra']['values'].append(999)
+            data['buy_volume'] = 999
+            self.assertEqual(self.engine.get_market_data(), sources[0])
+            self.assertEqual(self.engine.row['buy_volume'], sources[0]['buy_volume'])
+            await self.engine.tick(next(rows))
+            self.assertEqual(self.engine.get_market_data(), sources[1])
+            rows.close()
 
     async def test_partial_fills_share_directional_volume(self):
         low, high = self.place(), self.place(price=101.)

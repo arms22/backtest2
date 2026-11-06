@@ -37,6 +37,32 @@ uv run --extra backtest python -m backtest2 `
 
 ボット固有の指標、板の深さ、注文数量、建玉制御は各ボット側に置きます。共通パッケージから firebots や bankbots を import しません。
 
+## 再生中の市場データを取得する
+
+各取引所のバックテスト用 Strategy では、`await strategy.get_market_data(...)` で現在の保存行を辞書として取得できます。本番の Strategy には、このメソッドはありません。
+
+| 対象 | 呼び出し |
+| --- | --- |
+| bankbots | `await strategy.get_market_data(pair=None)` |
+| coinbots | `await strategy.get_market_data(pair)` |
+| firebots | `await strategy.get_market_data(product_code)` |
+| gmobots | `await strategy.get_market_data(symbol=None)` |
+
+省略可能な商品引数は設定済みの商品を使います。設定外の商品を指定すると `ValueError` になります。
+
+```python
+await strategy.wakeup()
+data = await strategy.get_market_data('btc_jpy')  # bankbots / coinbots の例
+buy_volume = data['buy_volume']
+sell_volume = data['sell_volume']
+```
+
+保存行の列名・値・型を維持し、取引所固有の列もそのまま返します。欠けている列の補完や個別約定への変換は行いません。読み込み処理が追加した内部項目は含めません。たとえば `bids_raw` はJSON文字列のままです。
+
+`time` は集計区間の終了時刻です。現在の再生行を確定済みのデータとして公開し、追加で1区間遅らせることはありません。履歴の蓄積や読み出しによる消去は行わず、同じ判断時点では同じ内容を返します。返却値は入れ子の値もコピーするため、変更しても再生処理や次の取得結果には影響しません。最初の市場データが届く前は `RuntimeError` になるため、`wakeup()` などで最初の更新を待ってください。
+
+既存の `get_trades_endpoint()` と `get_executions_endpoint()` の動作は変更しません。
+
 ## 入力データ
 
 入力ディレクトリには `fetch_manifest.json` と `market_rows.jsonl.gz` を置きます。既存の firebots 用保存形式を引き継いでいます。データの取得処理は、このライブラリに含みません。

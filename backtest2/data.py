@@ -7,6 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+class MarketRow(dict):
+    """Replay fields with the original saved columns kept separately."""
+    def __init__(self, source):
+        super().__init__(source)
+        self.source = source
+
+
 def iso(timestamp):
     return datetime.fromtimestamp(timestamp, timezone.utc).isoformat().replace('+00:00', 'Z')
 
@@ -67,7 +74,7 @@ def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
     """Decode stored market data without row-level validation."""
     with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
         for line in source:
-            row = json.loads(line)
+            row = MarketRow(json.loads(line))
             stamp = datetime.fromisoformat(row['time'].replace('Z', '+00:00'))
             timestamp = stamp.timestamp()
             second = math.floor(timestamp)

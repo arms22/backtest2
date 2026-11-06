@@ -3,6 +3,7 @@ import asyncio
 import contextvars
 import math
 from collections import Counter, deque
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
@@ -144,6 +145,12 @@ class ReplayEngine:
         self.longest_holding, self.previous_position = 0., 0.
         self.close_profit, self.close_loss = 0., 0.
         self.strategy = strategy_factory(self)
+
+    def get_market_data(self):
+        """Return an independent copy of the current closed interval's saved row."""
+        if self.row is None:
+            raise RuntimeError('No market data yet; wait for the first replay tick')
+        return deepcopy(self.row.source)
 
     async def launch(self):
         token = ACTIVE.set(self)
