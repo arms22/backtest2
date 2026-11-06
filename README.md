@@ -35,7 +35,7 @@ uv run --extra backtest python -m backtest2 `
 
 取引所アダプターは、通知の内容を本番と同じ形式の注文情報と残高に反映します。新規注文にはエンジンの `submit_order()`、取消には `cancel_order()` を使います。実装例は `../firebots/firebots/backtest.py` と `../bankbots/bankbots/backtest.py` です。
 
-ボット固有の指標、板の深さ、注文数量、建玉制御は各ボット側に置きます。共通パッケージから firebots や bankbots を import しません。
+ボット固有の指標、板の深さ、注文数量、建玉制御は各ボット側に置きます。
 
 ## 再生中の市場データを取得する
 
@@ -59,13 +59,11 @@ sell_volume = data['sell_volume']
 
 保存行の列名・値・型を維持し、取引所固有の列もそのまま返します。欠けている列の補完や個別約定への変換は行いません。読み込み処理が追加した内部項目は含めません。たとえば `bids_raw` はJSON文字列のままです。
 
-`time` は集計区間の終了時刻です。現在の再生行を確定済みのデータとして公開し、追加で1区間遅らせることはありません。履歴の蓄積や読み出しによる消去は行わず、同じ判断時点では同じ内容を返します。返却値は入れ子の値もコピーするため、変更しても再生処理や次の取得結果には影響しません。最初の市場データが届く前は `RuntimeError` になるため、`wakeup()` などで最初の更新を待ってください。
-
-既存の `get_trades_endpoint()` と `get_executions_endpoint()` の動作は変更しません。
+`time` は集計区間の終了時刻です。現在の再生行を確定済みのデータとして公開し、追加で1区間遅らせることはありません。返却値は入れ子の値もコピーするため、変更しても再生処理や次の取得結果には影響しません。最初の市場データが届く前は `RuntimeError` になるため、`wakeup()` などで最初の更新を待ってください。
 
 ## 入力データ
 
-入力ディレクトリには `fetch_manifest.json` と `market_rows.jsonl.gz` を置きます。既存の firebots 用保存形式を引き継いでいます。データの取得処理は、このライブラリに含みません。
+入力ディレクトリには `fetch_manifest.json` と `market_rows.jsonl.gz` を置きます。
 
 入力データは、取得時に検証対象の単一商品へ絞り込んでください。共通エンジンは、商品識別子によるデータの選別を行いません。取引所アダプターが使う商品識別子は、ケース定義から `strategy_factory` へ渡します。
 
@@ -81,13 +79,11 @@ sell_volume = data['sell_volume']
 | `trades` | 区間の約定件数。約定判定に使います。 |
 | `buy_count`, `sell_count` | 区間の売買方向別件数。共通の `Executions.get_data()` を使う場合に参照します。 |
 
-読み込み時に `bids_raw` と `asks_raw` を展開して `bids` と `asks` を生成します。`timestamp` は `time` から得たUNIX秒、`second` はその秒未満を切り下げた値です。これらを入力ファイルへ追加する必要はありません。
+読み込み時に `bids_raw` と `asks_raw` を展開して `bids` と `asks` を生成します。`timestamp` は `time` から得たUNIX秒、`second` はその秒未満を切り下げた値です。
 
 データ間隔は、データ行の先頭2行の時刻を秒単位に切り下げ、その差から求めます。manifest の `interval_seconds` は間隔の判定に使いません。1秒、5秒、1分、1時間など整数秒の間隔に対応し、再生期間と分割境界はデータ間隔にそろえます。
 
 入力ハッシュには manifest の `raw_sha256` を使います。未指定または `null` の場合は `output.sha256` を使います。`missing_intervals_utc_seconds` と `invalid_rows` は省略できます。manifest に欠損区間または不正行が記録されている場合、入力は拒否されます。
-
-各行の欠落・重複・時刻順序や末尾不足、板・OHLC・約定集計の値域や相互整合は検査しません。元の manifest は書き換えません。
 
 共通処理が使うファイル名を変更する場合は、`--data` からの相対パスまたは絶対パスを指定します。
 
@@ -133,7 +129,7 @@ GMOの両建て・決済専用注文、成行、IOC/FOK、資金調達費、証�
 | 1分 | 1、5、30、60分 |
 | 1時間 | 1、5、30、60時間 |
 
-一般には、データ間隔が1分未満なら秒、1時間未満なら分、それ以上なら時間を単位に1、5、30、60を選び、データ間隔そのものも加えます。同じ時間幅は重複させません。
+一般には、データ間隔が1分未満なら秒、1時間未満なら分、それ以上なら時間を単位に1、5、30、60を選び、データ間隔そのものも加えます。
 
 目標時刻は、約定時刻に各時間幅を加えた時刻です。目標時刻以降の最初の保存行にある中間価格を使い、実際の観測時刻と約定からの経過時間を記録します。データ間隔や欠落行によっては、指定した時間幅より遅れて観測されます。保存データの末尾までに目標時刻以降の行がない場合は、観測を打ち切ります。
 
@@ -151,7 +147,7 @@ uv run --extra backtest python -m backtest2.audit `
 
 ## 損益グラフ
 
-グラフは完了済みの `results.json`、約定台帳、元の保存データから描画します。ボットの再実行やデータの再取得は行いません。描画時のみ `matplotlib` が必要です。各ボットのリポジトリから実行してください。
+グラフは完了済みの `results.json`、約定台帳、元の保存データから描画します。描画時のみ `matplotlib` が必要です。各ボットのリポジトリから実行してください。
 
 ```powershell
 uv run --extra backtest --with matplotlib python -m backtest2.plot `
@@ -162,7 +158,7 @@ uv run --extra backtest --with matplotlib python -m backtest2.plot `
 
 既定の出力先は `<結果ディレクトリ>/pnl.svg` です。`--output <ファイル.png>` のように指定すると、形式と出力先を変更できます。`--case <ケース名>` と `--model <モデル名>` は複数指定でき、省略時はすべてのケースとモデルを描画します。モデルごとにパネルを分け、凡例に最終損益を表示します。時刻は既定でUTCです。日本時間を表示するには `--utc-offset 9` を指定します。
 
-タイトルは `--title "FX_BTC_JPY cumulative P&L"` のように指定します。省略時は `Cumulative P&L` です。Python APIでは `plot_pnl(..., title="FX_BTC_JPY cumulative P&L")` を使います。タイトルは manifest の内容に依存しません。
+タイトルは `--title "FX_BTC_JPY cumulative P&L"` のように指定します。省略時は `Cumulative P&L` です。Python APIでは `plot_pnl(..., title="FX_BTC_JPY cumulative P&L")` を使います。
 
 縦軸は、現金増減に未決済建玉の清算価値を加えたJPY損益です。清算価値は各バーの板で評価します。データ間隔が粗いと、バー内の価格や注文順序を復元できず、約定モデルは集計OHLCVに基づく近似になります。
 
@@ -177,4 +173,4 @@ uv run python -m unittest discover -s tests -v
 uv run python -m compileall -q backtest2
 ```
 
-uv のキャッシュ先は `pyproject.toml` の `[tool.uv]` で `.cache/uv` に設定済みです。`UV_CACHE_DIR` を指定する必要はありません。`PYTHONPYCACHEPREFIX` は指定せず、Python標準の `__pycache__/` を使います。キャッシュは `.gitignore` で除外しています。
+uv のキャッシュ先は `pyproject.toml` の `[tool.uv]` で `.cache/uv` に設定済みです。`PYTHONPYCACHEPREFIX` は指定せず、Python標準の `__pycache__/` を使います。キャッシュは `.gitignore` で除外しています。
