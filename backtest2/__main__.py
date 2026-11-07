@@ -27,6 +27,7 @@ def main():
     parser.add_argument('--cancel-latency', type=float, default=1.)
     parser.add_argument('--decision-offset', type=float, default=.9)
     parser.add_argument('--warmup-seconds', type=int, default=0)
+    parser.add_argument('--no-order-history', action='store_true', help='Disable all-order history recording')
     args = parser.parse_args()
     module = importlib.import_module(args.experiment)
     cases = module.build_cases()
@@ -36,7 +37,8 @@ def main():
             parser.error('Unknown cases: ' + ', '.join(sorted(unknown)))
         cases = [case for case in cases if case.name in args.case]
     configs = [ReplayConfig(model=model, latency=args.latency, cancel_latency=args.cancel_latency,
-                            decision_offset=args.decision_offset, warmup_seconds=args.warmup_seconds)
+                            decision_offset=args.decision_offset, warmup_seconds=args.warmup_seconds,
+                            record_orders=not args.no_order_history)
                for model in (args.model or [ReplayConfig().model])]
     result = asyncio.run(run_backtest(args.data, args.output, cases, configs, module.__file__,
                                       parse_time(args.start) if args.start else None,

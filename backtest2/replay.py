@@ -31,6 +31,7 @@ class ReplayConfig:
     decision_offset: float = 0.9
     warmup_seconds: int = 0
     tick_timeout: float = 10.0
+    record_orders: bool = True
 
     def __post_init__(self):
         if self.model not in ('touch', 'through', 'queue_touch'):
@@ -135,6 +136,7 @@ class ReplayEngine:
         self.gate, self.ready = asyncio.Event(), asyncio.Event()
         self.account = Position()
         self.orders, self.fills, self.requests, self.hourly = [], [], [], []
+        self.order_history = {}
         self.sequence = 0
         self.counts, self.errors = Counter(), []
         self.cash, self.turnover, self.peak, self.max_dd = 0., 0., 0., 0.
@@ -181,6 +183,14 @@ class ReplayEngine:
                      remaining=size, executed_size=0., state='pending',
                      arrival=self.now + self.config.latency, expire=expire,
                      cancel_done=math.inf, queue=None, activated=False, post_only=post_only)
+        if self.config.record_orders:
+            self.order_history[order['id']] = dict(
+                order=order['id'], side=side, price=price, size=size,
+                decision=self.now, arrival=order['arrival'],
+                cancel_requested=None, cancelled_at=None, expired_at=None,
+                first_fill=None, last_fill=None, executed_size=0., remaining=size,
+                state='pending', bid=self.row['bid'], ask=self.row['ask'],
+                cutoff=None, open_at_cutoff=False)
         self.orders.append(order)
         self.counts['new_orders'] += 1
         self.counts[side.lower() + '_orders'] += 1
@@ -188,6 +198,9 @@ class ReplayEngine:
         return order
 
     def cancel_order(self, order):
+        record = self.order_history.get(order['id'])
+        if record is not None and record['cancel_requested'] is None:
+            record['cancel_requested'] = self.now
         order['state'] = 'canceling'
         order['cancel_done'] = min(order['cancel_done'], self.now + self.config.cancel_latency)
         self.counts['cancel_requests'] += 1
@@ -225,6 +238,13 @@ class ReplayEngine:
                                decision=order.get('decision', order['arrival'] - self.config.latency),
                                arrival=order['arrival'], cancel_done=(order['cancel_done']
                                if math.isfinite(order['cancel_done']) else None)))
+        record = self.order_history.get(order['id']) if kind != 'terminal' else None
+        if record is not None:
+            if record['first_fill'] is None:
+                record['first_fill'] = timestamp
+            record['last_fill'] = timestamp
+            record.update(state=order['state'], executed_size=order['executed_size'],
+                          remaining=order['remaining'])
         self.strategy.on_fill(order, quantity, price, kind)
         self.counts['fill_events'] += 1
         self.counts[kind + '_fills'] += 1
@@ -306,6 +326,17 @@ class ReplayEngine:
             # earlier in the interval are possible; this convention is explicit.
             if stop <= timestamp and order['remaining'] > 0:
                 order['state'] = 'cancelled'
+        for order in ordered:
+            record = self.order_history.get(order['id'])
+            if record is None:
+                continue
+            record.update(state=order['state'], executed_size=order['executed_size'],
+                          remaining=round(order['size'] - order['executed_size'], 8))
+            if order['state'] == 'cancelled':
+                if order['expire'] < order['cancel_done']:
+                    record.update(state='expired', expired_at=order['expire'])
+                else:
+                    record['cancelled_at'] = order['cancel_done']
         self.orders = [o for o in self.orders if o['remaining'] > 0 and
                        min(o['cancel_done'], o['expire']) > timestamp]
         self.now = row['second'] + self.config.decision_offset
@@ -365,6 +396,12 @@ class ReplayEngine:
             raise ValueError('Cannot finish an empty replay')
         terminal_position = self.position
         self.counts['terminal_cancelled_orders'] = len(self.orders)
+        for order in self.orders:
+            record = self.order_history.get(order['id'])
+            if record is not None:
+                record.update(state=order['state'], open_at_cutoff=True)
+        for record in self.order_history.values():
+            record['cutoff'] = self.row['timestamp']
         self.orders.clear()
         if abs(terminal_position) > 1e-9:
             side = 'SELL' if terminal_position > 0 else 'BUY'

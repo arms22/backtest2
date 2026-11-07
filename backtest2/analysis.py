@@ -193,3 +193,72 @@ def summarize_matches(matches):
         for key in sorted(groups, key=str):
             rows.append(_summary_row(group_by, key, groups[key]))
     return rows
+
+
+_ORDER_STATES = ('pending', 'active', 'canceling', 'filled', 'cancelled',
+                 'expired', 'rejected')
+
+
+def _order_quantiles(values):
+    values = sorted(values)
+    if not values:
+        return dict(count=0, p50=None, p90=None, p99=None)
+
+    def percentile(p):
+        position = (len(values) - 1) * p
+        lower = int(position)
+        upper = min(lower + 1, len(values) - 1)
+        fraction = position - lower
+        return values[lower] + (values[upper] - values[lower]) * fraction
+
+    return dict(count=len(values), p50=percentile(.5), p90=percentile(.9),
+                p99=percentile(.99))
+
+
+def summarize_orders(orders):
+    """Summarize saved orders by side, excluding unobserved durations."""
+    orders = list(orders)
+    result = {}
+    for side in ('BUY', 'SELL'):
+        selected = [order for order in orders if order['side'] == side]
+        states = {state: 0 for state in _ORDER_STATES}
+        for order in selected:
+            states[order['state']] = states.get(order['state'], 0) + 1
+
+        durations = {key: [] for key in (
+            'cancel_request_seconds', 'cancel_complete_seconds', 'first_fill_seconds')}
+        decisions = []
+        distances = []
+        for order in selected:
+            decision = order.get('decision')
+            if decision is not None:
+                decisions.append(decision)
+                for key, field in (('cancel_request_seconds', 'cancel_requested'),
+                                   ('cancel_complete_seconds', 'cancelled_at'),
+                                   ('first_fill_seconds', 'first_fill')):
+                    timestamp = order.get(field)
+                    if timestamp is not None:
+                        durations[key].append(timestamp - decision)
+            bid, ask, price = (order.get(k) for k in ('bid', 'ask', 'price'))
+            if bid is not None and ask is not None and price is not None:
+                mid = (bid + ask) / 2
+                if mid:
+                    distance = ((mid - price) if side == 'BUY' else (price - mid)) / mid * 1e4
+                    distances.append(distance)
+
+        decisions.sort()
+        intervals = [later - earlier for earlier, later in zip(decisions, decisions[1:])]
+        result[side] = dict(
+            orders=len(selected),
+            filled_orders=sum(order.get('executed_size', 0) > 0 for order in selected),
+            unfilled_cancelled=sum(order['state'] == 'cancelled'
+                                   and order.get('executed_size', 0) == 0
+                                   for order in selected),
+            state_counts=states,
+            cancel_request_seconds=_order_quantiles(durations['cancel_request_seconds']),
+            cancel_complete_seconds=_order_quantiles(durations['cancel_complete_seconds']),
+            first_fill_seconds=_order_quantiles(durations['first_fill_seconds']),
+            order_interval_seconds=_order_quantiles(intervals),
+            distance_mid_bp=_order_quantiles(distances),
+        )
+    return result

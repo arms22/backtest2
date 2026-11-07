@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .analysis import match_fills_fifo, summarize_matches
+from .analysis import match_fills_fifo, summarize_matches, summarize_orders
 from .replay import ReplayEngine
 from .asyncio_support import sequential_asyncio
 from .data import file_hash, iso, iter_market_rows, load_market_manifest, parse_time
@@ -164,6 +164,14 @@ def _validate_run(manifest, start, end, split_at, cases, configs):
 async def _finish_segment(engines, output, completed_runs):
     for engine, case in engines:
         result = await engine.finish()
+        result['orders_file'] = None
+        if engine.config.record_orders:
+            filename = f'{engine.segment}_{engine.name}_orders.jsonl.gz'
+            with gzip.open(output/filename, 'wt', encoding='utf-8') as target:
+                for record in engine.order_history.values():
+                    target.write(json.dumps(record, separators=(',', ':'), allow_nan=False) + '\n')
+            result['orders_file'] = filename
+            result['order_summary'] = summarize_orders(engine.order_history.values())
         result['case'] = case.name
         result['bot_metadata'] = case.metadata
         matches, open_lots = match_fills_fifo(engine.fills)

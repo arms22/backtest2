@@ -119,7 +119,7 @@ GMOの両建て・決済専用注文、成行、IOC/FOK、資金調達費、証�
 
 `results.json` は正常終了時に最後に作成され、実行が完了したことを示します。
 
-`results.json` と `summary.csv` には、買い・売り別の発注数（`buy_orders`、`sell_orders`）、約定した注文数（`buy_filled_orders`、`sell_filled_orders`）、約定率（`buy_fill_rate`、`sell_fill_rate`）を保存します。約定率は「一度でも約定した注文数 ÷ 発注数」で、0〜1の値です。部分約定も1注文として数え、同じ注文の複数回の約定は重複して数えません。発注数には発注後に拒否・取消された注文と終了時の未約定注文を含め、ウォームアップ中に抑止した注文と終端清算は除外します。発注数が0なら約定率はJSONで `null`、CSVで空欄です。`REPORT.md` では百分率で表示します。個別の注文履歴ファイルは保存せず、再生中に件数を集計します。
+`results.json` と `summary.csv` には、買い・売り別の発注数（`buy_orders`、`sell_orders`）、約定した注文数（`buy_filled_orders`、`sell_filled_orders`）、約定率（`buy_fill_rate`、`sell_fill_rate`）を保存します。約定率は「一度でも約定した注文数 ÷ 発注数」で、0〜1の値です。部分約定も1注文として数え、同じ注文の複数回の約定は重複して数えません。発注数には発注後に拒否・取消された注文と終了時の未約定注文を含め、ウォームアップ中に抑止した注文と終端清算は除外します。発注数が0なら約定率はJSONで `null`、CSVで空欄です。`REPORT.md` では百分率で表示します。注文履歴も既定で保存します。
 
 約定後のマークアウトは、入力データの間隔に応じた時間幅で計算します。
 
@@ -173,6 +173,33 @@ short_stats = summarize_position_activity(matches, entry_side='SELL', fast_secon
 ```
 
 方向別の返却値は `entry_quantity`、`normal_profit`、`normal_loss`、`terminal_pnl`、`holding_seconds`、`fast_fraction` です。`entry_quantity` は通常決済と終了決済に対応する新規建玉の数量で、終了決済としてのエントリーは除外します。`fast_fraction` は「閾値未満で通常決済された数量 ÷ entry_quantity」で、売り建玉では短時間で買い戻した割合です。平均保有時間は通常決済だけの数量で加重します。対象なし・分母0の扱いは全体集計と同じです。未決済ロットは含まないため、全建玉を集計する際は終了決済済みの完了結果を使ってください。既存の全体集計の `fast_fraction` は従来どおり買い約定数量を分母にします。
+
+## 保存済み注文の分析
+
+既定で `*_orders.jsonl.gz` に1注文1行の要約を保存します。各結果の `orders_file` が保存先、`order_summary` が売買別集計です。ケース・期間区間・モデル・遅延の分離は約定台帳と同じで、`order` を同じ結果の約定台帳に対応付けます。IDだけで別の結果を結合しないでください。既存の名前が重複する設定は拒否されるため、取消遅延だけが異なる比較などは別ディレクトリで実行します。
+
+対象はエンジンが受け付けた注文で、未約定取消、部分約定、到着時のpost-only拒否、期限切れ、期間末の残存を含みます。アダプター内での拒否、ウォームアップで抑止した注文、終端清算は含みません。方向・指値・発注数量・約定数量・残数量・状態と、判断時の `bid`・`ask` を記録します。拒否時も残数量は発注数量から約定数量を引いた値です。
+
+時刻はUNIX秒です。`decision` は発注判断、`arrival` は判断＋設定遅延、`cancel_requested` は最初の取消要求です。`cancelled_at` は再生中に取消完了を処理した場合の有効な完了時刻で、期限切れは `expired_at` に分けます。`first_fill`・`last_fill` は台帳の最初・最後の約定時刻で、個々の部分約定は台帳を参照します。区間内の取消より先に約定した可能性を認める既存モデルにより、約定の保存時刻が取消完了時刻より後になる場合があります。
+
+`cutoff` は最後に観測した市場データの時刻、`open_at_cutoff` は期間末の残存を表します。残存状態は `pending`・`active`・`canceling` のままで、終端処理を取消完了には数えません。未観測時刻は `null` です。保存量とメモリ使用量は注文数に比例します。CLIの `--no-order-history`、または `ReplayConfig(record_orders=False)` で保存を無効にできます。
+
+```python
+import json
+from pathlib import Path
+from backtest2.analysis import read_jsonl_gz, summarize_orders
+
+# case は results.json の results 内の1件、directory は結果ディレクトリ
+stats = summarize_orders(read_jsonl_gz(Path(directory) / case['orders_file']))
+detail = Path(directory) / (case['segment'] + '_' + case['name'] + '_order_analysis.json')
+detail.write_text(json.dumps(stats, indent=2), encoding='utf-8')
+print('| Side | Orders | Filled | Unfilled cancelled |')
+print('| --- | ---: | ---: | ---: |')
+for side, values in stats.items():
+    print(f"| {side} | {values['orders']} | {values['filled_orders']} | {values['unfilled_cancelled']} |")
+```
+
+`summarize_orders` は売買別の注文数、一度以上約定した注文数、未約定取消数、状態別件数を返します。`cancel_request_seconds`・`cancel_complete_seconds`・`first_fill_seconds` は判断から各イベントまでの秒数、`order_interval_seconds` は同方向の判断時刻順の発注間隔です。`distance_mid_bp` は買いで `(mid-price)/mid*10000`、売りで `(price-mid)/mid*10000` です。各分布は観測数 `count` と線形補間の `p50`・`p90`・`p99` を返し、対象なしの分位点は `None` です。未観測時刻は分布から除外するため、全注文の寿命とは区別してください。古い結果や保存無効時の履歴は復元できません。
 
 ## 損益グラフ
 
