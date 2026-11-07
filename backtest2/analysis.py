@@ -2,6 +2,84 @@
 from collections import defaultdict, deque
 from datetime import datetime, timedelta, timezone
 from math import fsum
+import gzip
+import json
+from pathlib import Path
+
+from .data import file_hash
+
+
+def load_audited_results(directory):
+    """Read results whose SHA256 agrees with saved audit_checks.json.
+
+    This checks the audit's result reference, not the ledgers or source data.
+    """
+    directory = Path(directory)
+    path = directory / 'results.json'
+    saved = json.loads(path.read_text(encoding='utf-8'))
+    audit = json.loads((directory / 'audit_checks.json').read_text(encoding='utf-8'))
+    if audit['results_sha256'] != file_hash(path):
+        raise ValueError('Results SHA256 does not match the saved audit')
+    return saved
+
+
+def read_jsonl_gz(path):
+    """Read a saved gzip JSONL ledger into a list."""
+    with gzip.open(path, 'rt', encoding='utf-8') as source:
+        return [json.loads(line) for line in source]
+
+
+def summarize_activity(fills, matches, *, fast_seconds=60):
+    """Return normal/terminal P&L and quantity-weighted activity.
+
+    Normal means exit_kind != terminal. Holding time uses all normal slices;
+    fast_fraction uses normal slices below fast_seconds divided by nonterminal
+    BUY fill quantity (the original long-inventory experiment definition).
+    Empty sums are zero and ratios with a zero denominator are None.
+    """
+    fills = list(fills)
+    buy_quantity = fsum(f['size'] for f in fills
+                        if f['side'] == 'BUY' and f['kind'] != 'terminal')
+    sell_quantity = fsum(f['size'] for f in fills
+                         if f['side'] == 'SELL' and f['kind'] != 'terminal')
+    return dict(buy_quantity=buy_quantity, sell_quantity=sell_quantity,
+                **_summarize_activity(matches, buy_quantity, fast_seconds))
+
+
+def summarize_position_activity(matches, *, entry_side, fast_seconds=60):
+    """Summarize closed FIFO entry quantity by BUY (long) or SELL (short).
+
+    entry_quantity includes normal and terminal exits, excluding terminal
+    entries. It counts entry slices rather than fill volume, so reversals
+    do not mix new positions with closing trades. Unmatched open lots are
+    not included; use completed, terminal-liquidated results for full totals.
+    """
+    if entry_side not in ('BUY', 'SELL'):
+        raise ValueError('entry_side must be BUY or SELL')
+    selected = [m for m in matches
+                if m['entry_side'] == entry_side and m['entry_kind'] != 'terminal']
+    quantity = fsum(m['size'] for m in selected)
+    return dict(entry_quantity=quantity,
+                **_summarize_activity(selected, quantity, fast_seconds))
+
+
+def _summarize_activity(matches, quantity, fast_seconds):
+    matches = list(matches)
+    normal = [m for m in matches if m['exit_kind'] != 'terminal']
+    terminal = [m for m in matches if m['exit_kind'] == 'terminal']
+    normal_quantity = fsum(m['size'] for m in normal)
+    return dict(
+        normal_profit=fsum(m['gross_realized_pnl'] for m in normal
+                           if m['gross_realized_pnl'] > 0),
+        normal_loss=fsum(m['gross_realized_pnl'] for m in normal
+                         if m['gross_realized_pnl'] < 0),
+        terminal_pnl=fsum(m['gross_realized_pnl'] for m in terminal),
+        holding_seconds=(fsum(m['size'] * m['holding_seconds'] for m in normal)
+                         / normal_quantity if normal_quantity else None),
+        fast_fraction=(fsum(m['size'] for m in normal
+                            if m['holding_seconds'] < fast_seconds)
+                       / quantity if quantity else None),
+    )
 
 
 _EPSILON = 1e-10

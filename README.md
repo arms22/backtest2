@@ -145,6 +145,35 @@ uv run --extra backtest python -m backtest2.audit `
   --results <結果ディレクトリ>
 ```
 
+## 保存済み台帳の活動量集計
+
+`backtest2.analysis.summarize_activity(fills, matches, fast_seconds=60)` は、通常決済の利益合計・損失合計、終了決済の損益、終了決済を除く買い数量、通常決済の数量加重平均保有秒数、短時間売却割合を辞書で返します。買い数量のキーは `buy_quantity` です。短時間売却割合 `fast_fraction` は「保有時間が `fast_seconds` 未満の通常決済数量 ÷ 買い数量」で、買い持ちの検証で使う定義です。比率の分母が0なら `None`、合計の対象がなければ0を返します。
+
+```python
+from backtest2.analysis import load_audited_results, read_jsonl_gz, summarize_activity
+
+saved = load_audited_results(directory)
+case = saved['results'][0]
+prefix = directory / (case['segment'] + '_' + case['name'])  # directory は Path
+stats = summarize_activity(
+    read_jsonl_gz(str(prefix) + '_fills.jsonl.gz'),
+    read_jsonl_gz(str(prefix) + '_matches.jsonl.gz'),
+)
+```
+
+`load_audited_results` は `results.json` と `audit_checks.json` のSHA256参照を照合します。台帳や入力データの再監査は行いません。分類別の決済片集計には既存の `summarize_matches` を使います。
+
+`summarize_activity` は終了決済を除く売り約定数量 `sell_quantity` も返します。CFDの買い戻しを含むため、買い・売り約定数量は新規建玉数量とは異なります。買い建玉と売り建玉を分ける場合は、次のようにFIFO決済対応表のエントリー方向で集計します。
+
+```python
+from backtest2.analysis import summarize_position_activity
+
+long_stats = summarize_position_activity(matches, entry_side='BUY')
+short_stats = summarize_position_activity(matches, entry_side='SELL', fast_seconds=60)
+```
+
+方向別の返却値は `entry_quantity`、`normal_profit`、`normal_loss`、`terminal_pnl`、`holding_seconds`、`fast_fraction` です。`entry_quantity` は通常決済と終了決済に対応する新規建玉の数量で、終了決済としてのエントリーは除外します。`fast_fraction` は「閾値未満で通常決済された数量 ÷ entry_quantity」で、売り建玉では短時間で買い戻した割合です。平均保有時間は通常決済だけの数量で加重します。対象なし・分母0の扱いは全体集計と同じです。未決済ロットは含まないため、全建玉を集計する際は終了決済済みの完了結果を使ってください。既存の全体集計の `fast_fraction` は従来どおり買い約定数量を分母にします。
+
 ## 損益グラフ
 
 グラフは完了済みの `results.json`、約定台帳、元の保存データから描画します。描画時のみ `matplotlib` が必要です。各ボットのリポジトリから実行してください。
