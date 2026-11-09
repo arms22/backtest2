@@ -13,7 +13,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .analysis import match_fills_fifo, summarize_matches, summarize_orders
+from .analysis import (match_fills_fifo, summarize_matches, summarize_orders,
+                       summarize_activity, summarize_position_activity)
 from .replay import ReplayEngine
 from .asyncio_support import sequential_asyncio
 from .data import file_hash, iso, iter_market_rows, load_market_manifest, parse_time
@@ -187,6 +188,10 @@ async def _finish_segment(engines, output, completed_runs):
         assert math.isclose(result['open_quantity_at_cutoff'],
                             abs(result['terminal_position']), abs_tol=1e-8)
         result['fill_match_summary'] = summarize_matches(matches)
+        result['activity'] = summarize_activity(engine.fills, matches)
+        result['position_activity'] = {
+            side: summarize_position_activity(matches, entry_side=side)
+            for side in ('BUY', 'SELL')}
         completed_runs.append((result, engine.fills))
         path = output/f'{engine.segment}_{engine.name}_fills.jsonl.gz'
         with gzip.open(path, 'wt', encoding='utf-8') as target:

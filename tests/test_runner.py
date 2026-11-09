@@ -102,6 +102,10 @@ class RunnerTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue((output/'results.json').exists())
             self.assertTrue((output/'REPORT.md').exists())
             saved = json.loads((output/'results.json').read_text(encoding='utf-8'))
+            for row in saved['results']:
+                self.assertEqual(row['activity']['fast_seconds'], 60)
+                self.assertEqual(row['activity']['normal_quantity'], 0)
+                self.assertEqual(set(row['position_activity']), {'BUY', 'SELL'})
             self.assertEqual([r['bot_metadata'] for r in saved['results']], [metadata, metadata])
             self.assertTrue(all(r['gross_pnl'] == 0 and r['turnover'] == 0
                                 for r in result['results']))

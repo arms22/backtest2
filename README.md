@@ -4,7 +4,7 @@
 
 ## 使い始める
 
-各ボットのリポジトリから、隣接する `backtest2` ディレクトリをローカル依存として参照します。firebots と bankbots では、任意で導入する追加の依存関係をまとめた `backtest` extra を使います。次のコマンドを各ボットリポジトリのルートで実行してください。
+各ボットのリポジトリから、隣接する `backtest2` ディレクトリをローカル依存として参照します。bankbots、coinbots、firebots、gmobots では、任意で導入する追加の依存関係をまとめた `backtest` extra を使います。次のコマンドを各ボットリポジトリのルートで実行してください。
 
 ```powershell
 uv sync --extra backtest
@@ -44,7 +44,7 @@ uv run --extra backtest python -m backtest2 `
 | 対象 | 呼び出し |
 | --- | --- |
 | bankbots | `await strategy.get_market_data(pair=None)` |
-| coinbots | `await strategy.get_market_data(pair)` |
+| coinbots | `await strategy.get_market_data(pair=None)` |
 | firebots | `await strategy.get_market_data(product_code)` |
 | gmobots | `await strategy.get_market_data(symbol=None)` |
 
@@ -109,7 +109,7 @@ GMOの両建て・決済専用注文、成行、IOC/FOK、資金調達費、証�
 
 ## 結果と独立監査
 
-結果ディレクトリには約定台帳、FIFO決済対応表、集計CSV、Markdownレポートを保存します。約定台帳 `*_fills.jsonl.gz` は約定イベントごとに台帳内連番の `fill_id`、UNIX秒の時刻、売買方向、数量、価格、Maker/Taker/終端決済の区別、注文ID、実現損益を記録します。
+結果ディレクトリには実行条件と集計値をまとめた `results.json`、集計CSV、Markdownレポート、注文・約定などの詳細データを保存します。約定台帳 `*_fills.jsonl.gz` は約定イベントごとに台帳内連番の `fill_id`、UNIX秒の時刻、売買方向、数量、価格、Maker/Taker/終端決済の区別、注文ID、実現損益を記録します。
 
 `*_matches.jsonl.gz` は、先入先出（FIFO）方式で対応付けた建玉と決済の数量単位（決済片）を記録します。各行にエントリー・決済の約定ID、注文ID、時刻、価格、方向、種別、数量、保有秒数、実現損益を含みます。同じ約定が複数の決済片に分かれる場合は別行になります。`exit_kind=terminal` の決済片は通常の決済と区別できます。
 
@@ -145,7 +145,20 @@ uv run --extra backtest python -m backtest2.audit `
   --results <結果ディレクトリ>
 ```
 
-## 保存済み台帳の活動量集計
+## 活動量集計
+
+`results.json` の各ケース・区間に、全体の活動量 `activity` と買い・売り建玉別の `position_activity` を保存します。保存済みの指標は、台帳を読み込まずに参照できます。
+
+```python
+from backtest2.analysis import load_audited_results
+
+case = load_audited_results(directory)['results'][0]
+stats = case['activity']
+long_stats = case['position_activity']['BUY']
+short_stats = case['position_activity']['SELL']
+```
+
+閾値を変える場合や台帳の一部を分析する場合は、次の関数で再集計します。
 
 `backtest2.analysis.summarize_activity(fills, matches, fast_seconds=60)` は、通常決済の利益合計・損失合計、終了決済の損益、終了決済を除く買い数量、通常決済の数量加重平均保有秒数、短時間売却割合を辞書で返します。買い数量のキーは `buy_quantity` です。短時間売却割合 `fast_fraction` は「保有時間が `fast_seconds` 未満の通常決済数量 ÷ 買い数量」で、買い持ちの検証で使う定義です。比率の分母が0なら `None`、合計の対象がなければ0を返します。
 
@@ -161,7 +174,7 @@ stats = summarize_activity(
 )
 ```
 
-`load_audited_results` は `results.json` と `audit_checks.json` のSHA256参照を照合します。台帳や入力データの再監査は行いません。分類別の決済片集計には既存の `summarize_matches` を使います。
+`load_audited_results` は `results.json` と `audit_checks.json` のSHA256参照を照合します。台帳や入力データの再監査は行いません。分類別の決済片集計には `summarize_matches` を使います。ケース・区間全体の分類別集計は `results.json` の `fill_match_summary` と `match_summary.csv` に保存されています。
 
 `summarize_activity` は終了決済を除く売り約定数量 `sell_quantity` も返します。CFDの買い戻しを含むため、買い・売り約定数量は新規建玉数量とは異なります。買い建玉と売り建玉を分ける場合は、次のようにFIFO決済対応表のエントリー方向で集計します。
 
@@ -172,34 +185,61 @@ long_stats = summarize_position_activity(matches, entry_side='BUY')
 short_stats = summarize_position_activity(matches, entry_side='SELL', fast_seconds=60)
 ```
 
-方向別の返却値は `entry_quantity`、`normal_profit`、`normal_loss`、`terminal_pnl`、`holding_seconds`、`fast_fraction` です。`entry_quantity` は通常決済と終了決済に対応する新規建玉の数量で、終了決済としてのエントリーは除外します。`fast_fraction` は「閾値未満で通常決済された数量 ÷ entry_quantity」で、売り建玉では短時間で買い戻した割合です。平均保有時間は通常決済だけの数量で加重します。対象なし・分母0の扱いは全体集計と同じです。未決済ロットは含まないため、全建玉を集計する際は終了決済済みの完了結果を使ってください。既存の全体集計の `fast_fraction` は従来どおり買い約定数量を分母にします。
+方向別の主な返却値は `entry_quantity`、`normal_profit`、`normal_loss`、`terminal_pnl`、`holding_seconds`、`fast_fraction` です。`entry_quantity` は通常決済と終了決済に対応する新規建玉の数量で、終了決済としてのエントリーは除外します。`fast_fraction` は「閾値未満で通常決済された数量 ÷ entry_quantity」で、売り建玉では短時間で買い戻した割合です。平均保有時間は通常決済だけの数量で加重します。対象なし・分母0の扱いは全体集計と同じです。未決済ロットは含まないため、全建玉を集計する際は終了決済済みの完了結果を使ってください。全体集計の `fast_fraction` は買い約定数量を分母にします。
+
+## 複数結果の比較と期間集計
+
+`activity` と `position_activity` は、前節の活動量指標に加え、通常決済数量 `normal_quantity`、通常決済の数量と保有秒数の積の合計 `holding_quantity_seconds`、短時間決済数量 `fast_quantity`、閾値 `fast_seconds` を含みます。標準の `fast_seconds` は60で、保有時間が60秒未満の通常決済を短時間決済に数えます。これらを使い、台帳を読み直さずに期間全体の平均・比率を計算できます。
+
+`load_result_rows(directories)` は複数の監査済み結果を読み、比較用の行のリストを返します。各行には元の結果に加えて、保存先 `source_directory`、入力ハッシュ `input_raw_sha256`、ソースハッシュ `code_sha256` を含みます。監査参照の照合は `load_audited_results` と同じで、台帳の再監査や現在のソースとの照合は行いません。
+
+```python
+from backtest2.analysis import load_result_rows, aggregate_results
+
+rows = load_result_rows([historical_directory, latest_directory])
+# rows から期間別・ケース別の比較表を作れます。
+selected = [row for row in rows if row['case'] == 'skip_spread_0002']
+for total in aggregate_results(selected):
+    print(total['case'], total['gross_pnl'], total['activity']['holding_seconds'])
+```
+
+`aggregate_results(rows)` はケース名 `case`・再生設定 `config`・`bot_metadata` が同じ行をまとめます。異なる設定は別グループになります。入力商品・単位が同じで、期間が重複しない独立区間を利用側で選んでください。同じケース名でもソースが異なる場合があるため、比較の目的に照らしてソースハッシュとケース設定も確認してください。期間やソースの自動的な適合判定は行いません。
+
+返却値はグループごとの辞書のリストです。
+
+- 損益・売買代金・売買別注文数と約定注文数を合算し、`pnl_per_million` と約定率を合計値から再計算します。
+- `activity`・`position_activity` の平均保有時間と短時間決済割合は、保存した分子・分母から再計算します。閾値が異なる集計は結合できません。
+- `fill_markouts`・`fill_markouts_by_side_kind` は時間幅ごとに加算し、観測数量で加重した平均、観測数・打切り数を返します。存在する時間幅だけを集計します。
+- `max_segment_drawdown_liquidation_mtm` は区間ごとの最大DDの最大値です。複数区間を通じた連続DDではありません。注文時間などの分位点も期間集計の対象外です。
+- `segments` に各区間の識別情報と取得元、`segment_count` に区間数を返します。
+
+`aggregate_results` には、`activity`・`position_activity` とその加算用の値が保存された結果が必要です。必要な値を含まない結果は `load_result_rows` で読み込めますが、期間集計には使えません。不足値の自動補完や台帳の自動読み込みは行いません。活動量だけをまとめる場合は `merge_activity(summaries)` を使えます。
 
 ## 保存済み注文の分析
 
-既定で `*_orders.jsonl.gz` に1注文1行の要約を保存します。各結果の `orders_file` が保存先、`order_summary` が売買別集計です。ケース・期間区間・モデル・遅延の分離は約定台帳と同じで、`order` を同じ結果の約定台帳に対応付けます。IDだけで別の結果を結合しないでください。既存の名前が重複する設定は拒否されるため、取消遅延だけが異なる比較などは別ディレクトリで実行します。
+既定で `*_orders.jsonl.gz` に1注文1行の要約を保存します。各結果の `orders_file` が保存先、`order_summary` が売買別集計です。ケース・期間区間・モデル・遅延の分離は約定台帳と同じで、`order` を同じ結果の約定台帳に対応付けます。IDだけで別の結果を結合しないでください。結果名はケース名・モデル・注文遅延・区間で識別します。同じ結果名になる設定は拒否されるため、取消遅延だけが異なる比較などは別ディレクトリで実行します。
 
 対象はエンジンが受け付けた注文で、未約定取消、部分約定、到着時のpost-only拒否、期限切れ、期間末の残存を含みます。アダプター内での拒否、ウォームアップで抑止した注文、終端清算は含みません。方向・指値・発注数量・約定数量・残数量・状態と、判断時の `bid`・`ask` を記録します。拒否時も残数量は発注数量から約定数量を引いた値です。
 
-時刻はUNIX秒です。`decision` は発注判断、`arrival` は判断＋設定遅延、`cancel_requested` は最初の取消要求です。`cancelled_at` は再生中に取消完了を処理した場合の有効な完了時刻で、期限切れは `expired_at` に分けます。`first_fill`・`last_fill` は台帳の最初・最後の約定時刻で、個々の部分約定は台帳を参照します。区間内の取消より先に約定した可能性を認める既存モデルにより、約定の保存時刻が取消完了時刻より後になる場合があります。
+時刻はUNIX秒です。`decision` は発注判断、`arrival` は判断＋設定遅延、`cancel_requested` は最初の取消要求です。`cancelled_at` は再生中に取消完了を処理した場合の有効な完了時刻で、期限切れは `expired_at` に分けます。`first_fill`・`last_fill` は台帳の最初・最後の約定時刻で、個々の部分約定は台帳を参照します。区間内の取消より先に約定した可能性を認める再生モデルにより、約定の保存時刻が取消完了時刻より後になる場合があります。
 
 `cutoff` は最後に観測した市場データの時刻、`open_at_cutoff` は期間末の残存を表します。残存状態は `pending`・`active`・`canceling` のままで、終端処理を取消完了には数えません。未観測時刻は `null` です。保存量とメモリ使用量は注文数に比例します。CLIの `--no-order-history`、または `ReplayConfig(record_orders=False)` で保存を無効にできます。
 
 ```python
-import json
-from pathlib import Path
-from backtest2.analysis import read_jsonl_gz, summarize_orders
+from backtest2.analysis import load_audited_results
 
-# case は results.json の results 内の1件、directory は結果ディレクトリ
-stats = summarize_orders(read_jsonl_gz(Path(directory) / case['orders_file']))
-detail = Path(directory) / (case['segment'] + '_' + case['name'] + '_order_analysis.json')
-detail.write_text(json.dumps(stats, indent=2), encoding='utf-8')
+case = load_audited_results(directory)['results'][0]
+stats = case['order_summary']  # 注文履歴の保存が有効な場合
+
 print('| Side | Orders | Filled | Unfilled cancelled |')
 print('| --- | ---: | ---: | ---: |')
 for side, values in stats.items():
     print(f"| {side} | {values['orders']} | {values['filled_orders']} | {values['unfilled_cancelled']} |")
 ```
 
-`summarize_orders` は売買別の注文数、一度以上約定した注文数、未約定取消数、状態別件数を返します。`cancel_request_seconds`・`cancel_complete_seconds`・`first_fill_seconds` は判断から各イベントまでの秒数、`order_interval_seconds` は同方向の判断時刻順の発注間隔です。`distance_mid_bp` は買いで `(mid-price)/mid*10000`、売りで `(price-mid)/mid*10000` です。各分布は観測数 `count` と線形補間の `p50`・`p90`・`p99` を返し、対象なしの分位点は `None` です。未観測時刻は分布から除外するため、全注文の寿命とは区別してください。古い結果や保存無効時の履歴は復元できません。
+`order_summary` は売買別の注文数、一度以上約定した注文数、未約定取消数、状態別件数を含みます。`cancel_request_seconds`・`cancel_complete_seconds`・`first_fill_seconds` は判断から各イベントまでの秒数、`order_interval_seconds` は同方向の判断時刻順の発注間隔です。`distance_mid_bp` は買いで `(mid-price)/mid*10000`、売りで `(price-mid)/mid*10000` です。各分布は観測数 `count` と線形補間の `p50`・`p90`・`p99` を返し、対象なしの分位点は `None` です。未観測時刻は分布から除外するため、全注文の寿命とは区別してください。
+
+注文の一部を分析する場合は、`read_jsonl_gz` で `orders_file` を読み、対象注文を選んで `summarize_orders(orders)` に渡します。注文履歴の保存を無効にすると、`orders_file` は `null` になり、`order_summary` は保存されません。保存されていない履歴は復元できません。
 
 ## 損益グラフ
 

@@ -68,18 +68,123 @@ def _summarize_activity(matches, quantity, fast_seconds):
     normal = [m for m in matches if m['exit_kind'] != 'terminal']
     terminal = [m for m in matches if m['exit_kind'] == 'terminal']
     normal_quantity = fsum(m['size'] for m in normal)
+    holding_quantity_seconds = fsum(m['size'] * m['holding_seconds'] for m in normal)
+    fast_quantity = fsum(m['size'] for m in normal if m['holding_seconds'] < fast_seconds)
     return dict(
+        fast_seconds=fast_seconds, normal_quantity=normal_quantity,
+        holding_quantity_seconds=holding_quantity_seconds, fast_quantity=fast_quantity,
         normal_profit=fsum(m['gross_realized_pnl'] for m in normal
                            if m['gross_realized_pnl'] > 0),
         normal_loss=fsum(m['gross_realized_pnl'] for m in normal
                          if m['gross_realized_pnl'] < 0),
         terminal_pnl=fsum(m['gross_realized_pnl'] for m in terminal),
-        holding_seconds=(fsum(m['size'] * m['holding_seconds'] for m in normal)
-                         / normal_quantity if normal_quantity else None),
-        fast_fraction=(fsum(m['size'] for m in normal
-                            if m['holding_seconds'] < fast_seconds)
-                       / quantity if quantity else None),
+        holding_seconds=holding_quantity_seconds / normal_quantity if normal_quantity else None,
+        fast_fraction=fast_quantity / quantity if quantity else None,
     )
+
+
+def merge_activity(summaries):
+    """Merge saved activity totals without loading fills or FIFO slices."""
+    summaries = list(summaries)
+    if not summaries:
+        raise ValueError('At least one activity summary is required')
+    thresholds = {s['fast_seconds'] for s in summaries}
+    if len(thresholds) != 1:
+        raise ValueError('Cannot merge different fast_seconds thresholds')
+    quantity_fields = (('entry_quantity',) if 'entry_quantity' in summaries[0]
+                       else ('buy_quantity', 'sell_quantity'))
+    fields = (*quantity_fields, 'normal_profit', 'normal_loss', 'terminal_pnl',
+              'normal_quantity', 'holding_quantity_seconds', 'fast_quantity')
+    result = {key: fsum(s[key] for s in summaries) for key in fields}
+    quantity = result[quantity_fields[0]]
+    normal = result['normal_quantity']
+    result.update(fast_seconds=summaries[0]['fast_seconds'],
+                  holding_seconds=result['holding_quantity_seconds'] / normal if normal else None,
+                  fast_fraction=result['fast_quantity'] / quantity if quantity else None)
+    return result
+
+
+def load_result_rows(directories):
+    """Load audited result rows for comparison; retain source and condition metadata.
+
+    This uses the existing audit reference check, without re-auditing ledgers.
+    Old results remain readable; aggregation requires the saved activity totals.
+    """
+    rows = []
+    for directory in directories:
+        bundle = load_audited_results(directory)
+        for result in bundle['results']:
+            rows.append(dict(result, source_directory=str(Path(directory)),
+                             input_raw_sha256=bundle['input_raw_sha256'],
+                             code_sha256=bundle['code_sha256']))
+    return rows
+
+
+def _merge_markouts(summaries):
+    groups = defaultdict(list)
+    for summary in summaries:
+        for horizon, values in summary.items():
+            groups[str(horizon)].append(values)
+    result = {}
+    for horizon, values in groups.items():
+        totals = {key: fsum(v[key] for v in values) for key in (
+            'volume', 'markout_yen', 'eligible_volume', 'observed_volume', 'censored_volume')}
+        totals.update({key: sum(v[key] for v in values) for key in (
+            'count', 'eligible_count', 'observed_count', 'censored_count')})
+        totals['yen_per_btc'] = (totals['markout_yen'] / totals['volume']
+                                 if totals['volume'] else None)
+        result[horizon] = totals
+    return result
+
+
+def aggregate_results(rows):
+    """Aggregate independent periods by case, replay config and bot metadata.
+
+    Select compatible products, units and nonoverlapping periods before calling.
+    Code hashes are retained as provenance, not used as grouping keys. No ledger
+    reads or source-file checks are performed. Quantiles and continuous drawdown
+    cannot be recovered from per-period summaries and are not returned.
+    """
+    groups = defaultdict(list)
+    for row in rows:
+        key = json.dumps([row['case'], row['config'], row['bot_metadata']], sort_keys=True)
+        groups[key].append(row)
+    totals = []
+    for group in groups.values():
+        if any('activity' not in row or 'position_activity' not in row for row in group):
+            raise ValueError('Saved activity totals are missing; aggregate_results requires new results')
+        first = group[0]
+        total = {key: first[key] for key in ('case', 'config', 'bot_metadata')}
+        total['segments'] = [
+            {key: row[key] for key in ('segment', 'source_directory', 'input_raw_sha256',
+                                       'code_sha256') if key in row}
+            for row in group]
+        total['segment_count'] = len(group)
+        for key in ('gross_pnl', 'turnover'):
+            total[key] = fsum(row[key] for row in group)
+        total['pnl_per_million'] = (total['gross_pnl'] / total['turnover'] * 1e6
+                                     if total['turnover'] else None)
+        for side in ('buy', 'sell'):
+            for suffix in ('orders', 'filled_orders'):
+                key = f'{side}_{suffix}'
+                total[key] = sum(row[key] for row in group)
+            total[f'{side}_fill_rate'] = (total[f'{side}_filled_orders'] / total[f'{side}_orders']
+                                           if total[f'{side}_orders'] else None)
+        total['max_segment_drawdown_liquidation_mtm'] = max(
+            row['max_drawdown_liquidation_mtm'] for row in group)
+        total['activity'] = merge_activity(row['activity'] for row in group)
+        total['position_activity'] = {
+            side: merge_activity(row['position_activity'][side] for row in group)
+            for side in ('BUY', 'SELL')}
+        total['fill_markouts'] = _merge_markouts(row['fill_markouts'] for row in group)
+        markout_groups = defaultdict(list)
+        for row in group:
+            for key, summary in row['fill_markouts_by_side_kind'].items():
+                markout_groups[key].append(summary)
+        total['fill_markouts_by_side_kind'] = {
+            key: _merge_markouts(values) for key, values in markout_groups.items()}
+        totals.append(total)
+    return totals
 
 
 _EPSILON = 1e-10
