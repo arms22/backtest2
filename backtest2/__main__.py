@@ -4,7 +4,7 @@ import asyncio
 import importlib
 from pathlib import Path
 
-from .replay import ReplayConfig
+from .replay import FILL_MODELS, ReplayConfig
 from .data import parse_time
 from .runner import run_backtest
 
@@ -22,7 +22,7 @@ def main():
     parser.add_argument('--start', help='Inclusive ISO timestamp with timezone')
     parser.add_argument('--end', help='Exclusive ISO timestamp with timezone')
     parser.add_argument('--split-at', action='append', default=[], help='Restart bot/inventory at this ISO timestamp')
-    parser.add_argument('--model', choices=('touch', 'through', 'queue_touch'), action='append',
+    parser.add_argument('--model', choices=FILL_MODELS, action='append',
                         help='Fill model; defaults to queue_touch; repeat to compare models')
     parser.add_argument('--latency', type=float, default=defaults.latency)
     parser.add_argument('--cancel-latency', type=float, default=1.)

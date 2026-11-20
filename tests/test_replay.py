@@ -107,6 +107,34 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.tick(market(5))
         self.assertEqual(order['executed_size'], 0)
 
+    async def test_trade_through_uses_only_eligible_trades_in_arrival_row(self):
+        self.engine.config = ReplayConfig(model='trade_through')
+        await self.engine.tick(market(1, timestamp=1., trades_raw='[]'))
+        buy = self.engine.submit_order('BUY', .005, 100.)
+        better_buy = self.engine.submit_order('BUY', .002, 101.)
+        sell = self.engine.submit_order('SELL', .005, 110., expire=1.5)
+        trades = [
+            [-950, -1, 99, .010],  # Before arrival.
+            [-895, -1, 99, .010],  # At the arrival millisecond.
+            [-800, -1, 100, .001],  # Strictly through only the better buy.
+            [-700, -1, 99, .003],  # Shared across buys in price order.
+            [-600, 1, 110, .010],  # At the sell limit.
+            [-550, 1, 111, .002],  # Eligible before expiry.
+            [-500, 1, 111, .010],  # At expiry.
+            [1, -1, 99, .010],  # After the row timestamp.
+        ]
+        await self.engine.tick(market(2, timestamp=2., trades_raw=json.dumps(trades)))
+        self.assertEqual(buy['executed_size'], .002)
+        self.assertEqual(better_buy['executed_size'], .002)
+        self.assertEqual(sell['executed_size'], .002)
+        self.assertEqual([(f['kind'], f['price'], f['t']) for f in self.engine.fills],
+                         [('maker', 101., 2.), ('maker', 100., 2.), ('maker', 110., 2.)])
+
+    async def test_trade_through_requires_raw_data(self):
+        self.engine.config = ReplayConfig(model='trade_through')
+        with self.assertRaisesRegex(ValueError, 'requires a trades_raw'):
+            await self.engine.tick(market(1))
+
     async def test_takers_share_visible_depth(self):
         one, two = self.place(price=125), self.place(price=125)
         await self.engine.tick(market(5, asks=[[120., .006], [130., .1]],

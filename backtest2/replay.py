@@ -1,6 +1,7 @@
 """Offline single-product GTC limit-order replay; exchange behavior is supplied by a factory."""
 import asyncio
 import contextvars
+import json
 import math
 from collections import Counter, deque
 from copy import deepcopy
@@ -10,6 +11,7 @@ from datetime import datetime, timezone
 from .accounting import Position
 
 ACTIVE = contextvars.ContextVar('backtest_engine')
+FILL_MODELS = ('touch', 'through', 'queue_touch', 'trade_through')
 
 
 def vwap(book, quantity):
@@ -34,7 +36,7 @@ class ReplayConfig:
     record_orders: bool = True
 
     def __post_init__(self):
-        if self.model not in ('touch', 'through', 'queue_touch'):
+        if self.model not in FILL_MODELS:
             raise ValueError('Unknown fill model')
         for name in ('latency', 'cancel_latency', 'decision_offset', 'tick_timeout'):
             if not math.isfinite(getattr(self, name)):
@@ -254,8 +256,31 @@ class ReplayEngine:
             self.counts['fills_during_cancel'] += 1
 
     def market_update(self, row):
-        self.row = row
         timestamp = row['timestamp']
+        trade_through = self.config.model == 'trade_through'
+        trades_by_side = {'BUY': [], 'SELL': []}
+        if trade_through:
+            raw = row.get('trades_raw')
+            if not isinstance(raw, str):
+                raise ValueError('trade_through requires a trades_raw JSON array in every market row')
+            if raw != '[]':
+                trades = json.loads(raw)
+                if not isinstance(trades, list):
+                    raise ValueError('trades_raw must be a JSON array')
+                for offset, side, price, size in trades:
+                    if (type(offset) is not int or type(side) is not int or side not in (-1, 1)
+                            or not all(math.isfinite(value) and value > 0 for value in (price, size))):
+                        raise ValueError('Invalid trades_raw execution')
+                    # Offsets are floored. An offset of zero or later cannot
+                    # establish that the execution occurred before this row.
+                    if offset < 0:
+                        earliest = timestamp + offset / 1000
+                        latest = timestamp + (offset + 1) / 1000
+                        trades_by_side['BUY' if side == -1 else 'SELL'].append(
+                            [earliest, latest, price, size])
+                for trades in trades_by_side.values():
+                    trades.sort(key=lambda trade: trade[0])
+        self.row = row
         interval_start = self.previous_time if self.previous_time is not None else timestamp - self.interval_seconds
         # Each side has one shared aggregate budget, including overlapping orders.
         budget = {'BUY': row['sell_volume'], 'SELL': row['buy_volume']}
@@ -307,7 +332,22 @@ class ReplayEngine:
                         remaining -= taken
             if order['remaining'] <= 0:
                 continue
-            if order['arrival'] <= interval_start:
+            if trade_through:
+                quantity = 0.
+                for trade in trades_by_side[order['side']]:
+                    earliest, latest, price, available = trade
+                    if earliest <= order['arrival'] or latest > stop:
+                        continue
+                    crossed = price < order['price'] if buy else price > order['price']
+                    if not crossed or available <= 0:
+                        continue
+                    taken = round(min(order['remaining'] - quantity, available), 8)
+                    trade[3] = round(available - taken, 8)
+                    quantity = round(quantity + taken, 8)
+                    if quantity >= order['remaining']:
+                        break
+                self.fill(order, quantity, order['price'], timestamp, 'maker')
+            elif order['arrival'] <= interval_start:
                 if self.config.model == 'through':
                     crossed = row['high'] < order['price'] if buy else row['low'] > order['price']
                 else:
