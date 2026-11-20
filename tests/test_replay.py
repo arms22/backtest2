@@ -120,9 +120,11 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(ValueError, 'Insufficient stored depth'):
             self.engine.equity()
 
-    async def test_future_snapshot_is_rejected(self):
-        with self.assertRaisesRegex(ValueError, 'newer than'):
-            await self.engine.tick(market(5, timestamp=5.99))
+    async def test_decision_offset_is_relative_to_snapshot(self):
+        await self.engine.tick(market(5, timestamp=5.99))
+        self.assertAlmostEqual(self.engine.now, 5.995)
+        order = self.engine.submit_order('BUY', .003, 100.)
+        self.assertAlmostEqual(order['arrival'], 6.095)
 
     async def test_warmup_suppresses_new_orders(self):
         self.engine.config = ReplayConfig(warmup_seconds=10)
@@ -214,7 +216,7 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             await engine.launch()
             for second in range(35):
                 await engine.tick(market(second))
-            self.assertEqual(bot.times, [15.9, 16.9, 30.9, 31.9])
+            self.assertEqual(bot.times, [15.015, 16.015, 30.015, 31.015])
         finally:
             await engine.stop()
 

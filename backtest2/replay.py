@@ -26,9 +26,9 @@ def vwap(book, quantity):
 @dataclass(frozen=True)
 class ReplayConfig:
     model: str = 'queue_touch'
-    latency: float = 1.0
+    latency: float = 0.1
     cancel_latency: float = 1.0
-    decision_offset: float = 0.9
+    decision_offset: float = 0.005
     warmup_seconds: int = 0
     tick_timeout: float = 10.0
     record_orders: bool = True
@@ -87,7 +87,7 @@ async def sleep(seconds):
 
 
 async def wakeup_every_seconds(interval):
-    """Whole-second periodic decisions; clock phase is supplied by decision_offset."""
+    """Wait for the next market row at or after a whole-second deadline."""
     if not isinstance(interval, int) or interval <= 0:
         raise ValueError('Interval must be a positive integer number of seconds')
     engine = ACTIVE.get()
@@ -339,7 +339,7 @@ class ReplayEngine:
                     record['cancelled_at'] = order['cancel_done']
         self.orders = [o for o in self.orders if o['remaining'] > 0 and
                        min(o['cancel_done'], o['expire']) > timestamp]
-        self.now = row['second'] + self.config.decision_offset
+        self.now = timestamp + self.config.decision_offset
         self.previous_time = timestamp
         self.strategy.on_market_update()
 
@@ -380,8 +380,6 @@ class ReplayEngine:
             self.hourly.append([second + self.interval_seconds, equity])
 
     async def tick(self, row):
-        if row['timestamp'] > row['second'] + self.config.decision_offset:
-            raise ValueError('Snapshot is newer than the configured decision time')
         self.market_update(row)
         self.ready.clear()
         self.gate.set()

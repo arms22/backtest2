@@ -22,7 +22,7 @@ class AuditTests(unittest.IsolatedAsyncioTestCase):
             data.mkdir()
             save_market(data, range(2000, 2004))
             bundle = await run_backtest(data, output, [BotCase('trading', TradingBot, Adapter)],
-                                        [ReplayConfig()], __file__, progress=lambda text: None)
+                                        [ReplayConfig(latency=1.0)], __file__, progress=lambda text: None)
             checked = audit(data, output)
             self.assertAlmostEqual(checked['checks'][0]['pnl'], -.03)
             self.assertTrue(checked['checks'][0]['flat'])
