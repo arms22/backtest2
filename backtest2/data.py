@@ -3,7 +3,10 @@ import gzip
 import hashlib
 import json
 import math
+import re
+from collections import UserList
 from datetime import datetime, timezone
+from functools import cached_property
 from pathlib import Path
 
 from msgspec import DecodeError
@@ -23,6 +26,82 @@ class MarketRow(dict):
     def __init__(self, source):
         super().__init__(source)
         self.source = source
+
+
+# Stored levels are flat [price, size] arrays. Leave uncommon layouts to the
+# regular decoder. The final comma proves there is a tail after level 20.
+_BOOK_PREFIX = re.compile(r'\s*\[\s*(?:\[[^\[\]"]*\]\s*,\s*){20}')
+_NEXT_LEVEL = re.compile(r'(\[[^\[\]"]*\])\s*,\s*')
+
+
+class _ReplayBook(UserList):
+    """Decode the first 20 levels on access and the tail only when needed."""
+
+    def __init__(self, raw):
+        self._raw = raw
+        self._levels = list(raw) if isinstance(raw, (list, tuple, UserList)) else None
+        self._tail = 0
+
+    def _prefix(self):
+        if self._levels is None:
+            match = _BOOK_PREFIX.match(self._raw) if isinstance(self._raw, str) else None
+            if match:
+                self._tail = match.end()
+                comma = self._raw.rfind(',', 0, self._tail)
+                self._levels = decode_market_json(self._raw[:comma] + ']')
+            else:
+                self._levels = decode_market_json(self._raw)
+        return self._levels
+
+    @cached_property
+    def data(self):
+        levels = self._prefix()
+        if self._tail:
+            levels.extend(decode_market_json('[' + self._raw[self._tail:]))
+            self._tail = 0
+        return levels
+
+    def __copy__(self):
+        return self.data.copy()
+
+    def _extend_to(self, stop):
+        start = cursor = self._tail
+        for _ in range(stop - len(self._levels)):
+            match = _NEXT_LEVEL.match(self._raw, cursor)
+            if match is None:
+                # End of the book or an uncommon layout: decode the remaining JSON.
+                return self.data
+            end = match.end(1)
+            cursor = match.end()
+        self._levels.extend(decode_market_json('[' + self._raw[start:end] + ']'))
+        self._tail = cursor
+        return self._levels
+
+    def __getitem__(self, index):
+        levels = self._prefix()
+        if self._tail:
+            if isinstance(index, slice):
+                if ((index.step is None or index.step > 0) and (index.start or 0) >= 0
+                        and index.stop is not None and index.stop >= 0):
+                    if index.stop > len(levels) and (index.start or 0) < index.stop:
+                        levels = self._extend_to(index.stop)
+                else:
+                    levels = self.data
+            elif index >= len(levels):
+                levels = self._extend_to(index + 1)
+            elif index < 0:
+                levels = self.data
+        return levels[index]
+
+    def __iter__(self):
+        levels = self._prefix()
+        yield from levels
+        index = len(levels)
+        while self._tail or index < len(levels):
+            if index == len(levels):
+                self._extend_to(index + 1)
+            yield levels[index]
+            index += 1
 
 
 def iso(timestamp):
@@ -81,7 +160,7 @@ def load_market_manifest(directory, data_file='market_rows.jsonl.gz', manifest_f
                 interval_seconds=get_interval_seconds(directory, data_file))
 
 
-def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
+def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz', *, book_decoder=decode_market_json):
     """Decode stored market data without row-level validation."""
     with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
         for line in source:
@@ -95,7 +174,11 @@ def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
                 break
             # Replay consumes the stored values like the bot consumes exchange
             # data; only decode the book fields needed by the strategy/model.
-            row['bids'] = decode_market_json(row['bids_raw'])
-            row['asks'] = decode_market_json(row['asks_raw'])
+            row['bids'] = book_decoder(row['bids_raw'])
+            row['asks'] = book_decoder(row['asks_raw'])
             row['timestamp'], row['second'] = timestamp, second
             yield row
+
+
+def iter_replay_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
+    return iter_market_rows(directory, start, end, data_file, book_decoder=_ReplayBook)

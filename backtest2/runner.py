@@ -17,7 +17,7 @@ from .analysis import (match_fills_fifo, summarize_matches, summarize_orders,
                        summarize_activity, summarize_position_activity)
 from .replay import ReplayEngine
 from .asyncio_support import sequential_asyncio
-from .data import file_hash, iso, iter_market_rows, load_market_manifest, parse_time
+from .data import file_hash, iso, iter_replay_rows as iter_market_rows, load_market_manifest, parse_time
 
 @dataclass(frozen=True)
 class BotCase:
