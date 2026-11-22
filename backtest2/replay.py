@@ -291,7 +291,8 @@ class ReplayEngine:
         interval_start = self.previous_time if self.previous_time is not None else timestamp - self.interval_seconds
         # Each side has one shared aggregate budget, including overlapping orders.
         budget = {'BUY': row['sell_volume'], 'SELL': row['buy_volume']}
-        taker_books = {}
+        # Only levels touched by taker fills need a private remaining size.
+        taker_residuals = {'BUY': [], 'SELL': []}
         # Different orders share depth; maker allocation follows price/time priority.
         ordered = sorted(self.orders, key=lambda o: (o['side'],
                          -o['price'] if o['side'] == 'BUY' else o['price'], o['arrival']))
@@ -306,15 +307,20 @@ class ReplayEngine:
                 continue
             buy = order['side'] == 'BUY'
             if not order['activated']:
-                book = taker_books.get(order['side'])
-                if book is None:
-                    book = row['asks'] if buy else row['bids']
+                book = row['asks'] if buy else row['bids']
+                residuals = taker_residuals[order['side']]
                 order['activated'] = True
                 if order['state'] == 'pending':
                     order['state'] = 'active'
                 if self.config.model == 'queue_touch':
                     same_book = row['bids'] if buy else row['asks']
-                    order['queue'] = sum(q for p, q in same_book if p == order['price'])
+                    at_price = []
+                    for price, size in same_book:
+                        if price == order['price']:
+                            at_price.append(size)
+                        elif (price < order['price'] if buy else price > order['price']):
+                            break
+                    order['queue'] = sum(at_price)
                 # A newly arriving limit may cross. Execute only visible liquidity
                 # satisfying the limit, preserving quantity and price impact.
                 if order['post_only'] and (book[0][0] <= order['price'] if buy else book[0][0] >= order['price']):
@@ -322,21 +328,26 @@ class ReplayEngine:
                     order['remaining'] = 0.
                     self.counts['post_only_rejections'] += 1
                     continue
-                executable = [(p, q) for p, q in book
-                              if (p <= order['price'] if buy else p >= order['price'])]
+                executable = []
+                for index, (price, size) in enumerate(book):
+                    if (price > order['price'] if buy else price < order['price']):
+                        break
+                    if index < len(residuals):
+                        size = residuals[index]
+                    executable.append((price, size))
                 available = sum(q for p, q in executable)
                 quantity = min(order['remaining'], available) if stop > timestamp else 0
                 if quantity > 0:
-                    if order['side'] not in taker_books:
-                        book = [list(level) for level in book]
-                        taker_books[order['side']] = book
                     self.fill(order, quantity, vwap(executable, quantity), timestamp, 'taker')
                     remaining = quantity
-                    for level in book:
-                        if (level[0] > order['price'] if buy else level[0] < order['price']):
+                    for index, (_, size) in enumerate(executable):
+                        if remaining <= 0:
                             break
-                        taken = min(level[1], remaining)
-                        level[1] -= taken
+                        taken = min(size, remaining)
+                        if index < len(residuals):
+                            residuals[index] = size - taken
+                        else:
+                            residuals.append(size - taken)
                         remaining -= taken
             if order['remaining'] <= 0:
                 continue

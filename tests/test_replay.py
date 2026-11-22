@@ -142,6 +142,14 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
                                       sell_volume=0., sell_count=0, trades=0))
         self.assertAlmostEqual(one['executed_size'] + two['executed_size'], .006)
 
+    async def test_takers_share_partial_level_across_prices(self):
+        self.place(price=125, size=.004)
+        self.place(price=125, size=.004)
+        asks = [[120., .006], [124., .01], [130., .1]]
+        await self.engine.tick(market(5, asks=asks, trades=0))
+        self.assertEqual([f['price'] for f in self.engine.fills], [120., 122.])
+        self.assertEqual(asks, [[120., .006], [124., .01], [130., .1]])
+
     async def test_no_vwap_extrapolation(self):
         self.place()
         await self.engine.tick(market(5))
