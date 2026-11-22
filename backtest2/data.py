@@ -6,6 +6,17 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 
+from msgspec import DecodeError
+from msgspec.json import decode
+
+
+def decode_market_json(value):
+    try:
+        return decode(value)
+    except (DecodeError, UnicodeError):
+        # Older snapshots can contain NaN and other values accepted by json.loads.
+        return json.loads(value)
+
 
 class MarketRow(dict):
     """Replay fields with the original saved columns kept separately."""
@@ -74,7 +85,7 @@ def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
     """Decode stored market data without row-level validation."""
     with gzip.open(Path(directory)/data_file, 'rt', encoding='utf-8') as source:
         for line in source:
-            row = MarketRow(json.loads(line))
+            row = MarketRow(decode_market_json(line))
             stamp = datetime.fromisoformat(row['time'].replace('Z', '+00:00'))
             timestamp = stamp.timestamp()
             second = math.floor(timestamp)
@@ -84,7 +95,7 @@ def iter_market_rows(directory, start, end, data_file='market_rows.jsonl.gz'):
                 break
             # Replay consumes the stored values like the bot consumes exchange
             # data; only decode the book fields needed by the strategy/model.
-            row['bids'] = json.loads(row['bids_raw'])
-            row['asks'] = json.loads(row['asks_raw'])
+            row['bids'] = decode_market_json(row['bids_raw'])
+            row['asks'] = decode_market_json(row['asks_raw'])
             row['timestamp'], row['second'] = timestamp, second
             yield row

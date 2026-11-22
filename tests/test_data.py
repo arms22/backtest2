@@ -1,10 +1,23 @@
 import json
+import math
 from pathlib import Path
 import tempfile
 import unittest
 
-from backtest2.data import load_market_manifest
+from backtest2.data import decode_market_json, load_market_manifest
 from helpers import save_market
+
+
+class MarketJsonTests(unittest.TestCase):
+    def test_preserves_numeric_types_and_legacy_values(self):
+        text = '[18446744073709551617, 1, 1.0, -0.0, 1.2345678901234567]'
+        decoded = decode_market_json(text)
+        self.assertEqual(decoded, json.loads(text))
+        self.assertEqual([type(value) for value in decoded], [int, int, float, float, float])
+        self.assertEqual(math.copysign(1, decoded[3]), -1)
+        self.assertTrue(math.isnan(decode_market_json('[NaN]')[0]))
+        with self.assertRaises(json.JSONDecodeError):
+            decode_market_json('[invalid]')
 
 
 class ManifestTests(unittest.TestCase):

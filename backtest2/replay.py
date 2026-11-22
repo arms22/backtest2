@@ -1,7 +1,6 @@
 """Offline single-product GTC limit-order replay; exchange behavior is supplied by a factory."""
 import asyncio
 import contextvars
-import json
 import math
 from collections import Counter, deque
 from copy import deepcopy
@@ -9,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
 from .accounting import Position
+from .data import decode_market_json
 
 ACTIVE = contextvars.ContextVar('backtest_engine')
 FILL_MODELS = ('touch', 'through', 'queue_touch', 'trade_through')
@@ -264,7 +264,7 @@ class ReplayEngine:
             if not isinstance(raw, str):
                 raise ValueError('trade_through requires a trades_raw JSON array in every market row')
             if raw != '[]':
-                trades = json.loads(raw)
+                trades = decode_market_json(raw)
                 if not isinstance(trades, list):
                     raise ValueError('trades_raw must be a JSON array')
                 for offset, side, price, size in trades:
