@@ -6,11 +6,14 @@ from collections import Counter, deque
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
+from time import perf_counter
+from types import coroutine
 
 from .accounting import Position
 from .data import decode_market_json
 
 ACTIVE = contextvars.ContextVar('backtest_engine')
+_NEXT_TICK = object()
 FILL_MODELS = ('touch', 'through', 'queue_touch', 'trade_through')
 
 
@@ -69,11 +72,13 @@ class VirtualDatetime(datetime):
         return datetime.fromtimestamp(ACTIVE.get().now, timezone.utc).replace(tzinfo=None)
 
 
+@coroutine
+def _wait_for_tick():
+    yield _NEXT_TICK
+
+
 async def wakeup(*args):
-    engine = ACTIVE.get()
-    engine.ready.set()
-    await engine.gate.wait()
-    engine.gate.clear()
+    await _wait_for_tick()
 
 
 async def sleep(seconds):
@@ -135,7 +140,7 @@ class ReplayEngine:
         if hasattr(bot, 'logger'):
             bot.logger = ReplayLogger()
         self.now, self.row, self.previous_time = float(start), None, None
-        self.gate, self.ready = asyncio.Event(), asyncio.Event()
+        self._bot_run = None
         self.account = Position()
         self.orders, self.fills, self.requests, self.hourly = [], [], [], []
         self.order_history = {}
@@ -157,19 +162,21 @@ class ReplayEngine:
         return deepcopy(self.row.source)
 
     async def launch(self):
-        token = ACTIVE.set(self)
-        try:
-            self.task = asyncio.create_task(self.bot.run(self.strategy))
-            self.task.add_done_callback(lambda task: self.ready.set())
-        finally:
-            ACTIVE.reset(token)
-        await self.wait_ready()
+        self._bot_context = contextvars.copy_context()
+        self._bot_context.run(ACTIVE.set, self)
+        self._bot_run = self._bot_context.run(self.bot.run, self.strategy)
+        self._resume_bot()
 
-    async def wait_ready(self):
-        await asyncio.wait_for(self.ready.wait(), self.config.tick_timeout)
-        if self.task.done():
-            await self.task
-            raise RuntimeError('Bot stopped before the next tick')
+    def _resume_bot(self):
+        started = perf_counter()
+        try:
+            request = self._bot_context.run(self._bot_run.send, None)
+        except StopIteration:
+            raise RuntimeError('Bot stopped before the next tick') from None
+        if request is not _NEXT_TICK:
+            raise RuntimeError('Bot suspended outside the replay clock')
+        if perf_counter() - started > self.config.tick_timeout:
+            raise TimeoutError('Bot took too long to reach the next replay tick')
 
     @property
     def position(self):
@@ -421,9 +428,7 @@ class ReplayEngine:
 
     async def tick(self, row):
         self.market_update(row)
-        self.ready.clear()
-        self.gate.set()
-        await self.wait_ready()
+        self._resume_bot()
         if self.errors:
             raise RuntimeError(self.errors[:5])
         self.observe()
@@ -452,13 +457,15 @@ class ReplayEngine:
         return self.summary(terminal_position)
 
     async def stop(self):
-        if not hasattr(self, 'task'):
+        bot_run, self._bot_run = self._bot_run, None
+        if bot_run is None or bot_run.cr_frame is None:
             return
-        self.task.cancel()
         try:
-            await self.task
-        except asyncio.CancelledError:
+            self._bot_context.run(bot_run.throw, asyncio.CancelledError())
+        except (asyncio.CancelledError, StopIteration):
             pass
+        finally:
+            self._bot_context.run(bot_run.close)
 
     def summary(self, terminal_position):
         assert abs(self.position) < 1e-8

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from backtest2.data import iter_market_rows
 from backtest2.accounting import Position
@@ -201,7 +202,7 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LifecycleTests(unittest.IsolatedAsyncioTestCase):
-    async def test_bot_exception_is_propagated_and_task_finishes(self):
+    async def test_bot_exception_is_propagated(self):
         class BrokenBot(PassiveBot):
             async def run(self, strategy):
                 raise ValueError('broken startup')
@@ -210,21 +211,38 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
                               'test', 'broken', Adapter)
         with self.assertRaisesRegex(ValueError, 'broken startup'):
             await engine.launch()
-        self.assertTrue(engine.task.done())
+        await engine.stop()
 
-    async def test_missing_virtual_clock_binding_times_out(self):
+    async def test_missing_virtual_clock_binding_fails_and_cleans_up(self):
+        stopped = []
+
         class SleepingBot(PassiveBot):
             async def run(self, strategy):
-                await asyncio.sleep(10)
+                try:
+                    await asyncio.sleep(10)
+                except asyncio.CancelledError:
+                    stopped.append(ACTIVE.get())
+                    raise
 
-        engine = ReplayEngine(SleepingBot(), ReplayConfig(tick_timeout=.01),
-                              0, 10, 'test', 'sleeping', Adapter)
+        engine = ReplayEngine(SleepingBot(), ReplayConfig(), 0, 10,
+                              'test', 'sleeping', Adapter)
         try:
-            with self.assertRaises(TimeoutError):
+            with self.assertRaisesRegex(RuntimeError, 'suspended outside the replay clock'):
                 await engine.launch()
         finally:
             await engine.stop()
-        self.assertTrue(engine.task.cancelled())
+        self.assertEqual(stopped, [engine])
+
+    async def test_tick_timeout_is_checked_when_bot_returns_to_clock(self):
+        engine = ReplayEngine(PassiveBot(), ReplayConfig(tick_timeout=.01),
+                              0, 10, 'test', 'slow', Adapter)
+        try:
+            await engine.launch()
+            with patch('backtest2.replay.perf_counter', side_effect=[0., .02]):
+                with self.assertRaisesRegex(TimeoutError, 'took too long'):
+                    await engine.tick(market(0))
+        finally:
+            await engine.stop()
 
     async def test_periodic_clock_and_fractional_sleep_use_virtual_time(self):
         class TimedBot:

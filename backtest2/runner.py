@@ -273,7 +273,7 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
         for case in cases:
             contexts.enter_context(case.clock_context())
         try:
-            for row in iter_market_rows(data, start, end, data_file):
+            for index, row in enumerate(iter_market_rows(data, start, end, data_file), 1):
                 second = row['second']
                 midpoints.append((row['timestamp'], (row['bid'] + row['ask']) / 2))
                 while segment_index < 0 or second >= boundaries[segment_index + 1]:
@@ -294,6 +294,9 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
                     await engine.tick(row)
                 if (second + interval_seconds - start) % 3600 == 0:
                     progress(f'Replayed {iso(second+interval_seconds)} ({len(engines)} cases/models)')
+                if index % 256 == 0:
+                    # Let the caller cancel a long run without yielding on every tick.
+                    await asyncio.sleep(0)
             await _finish_segment(engines, output, completed_runs)
         finally:
             await asyncio.gather(*(engine.stop() for engine, case in engines), return_exceptions=True)
