@@ -312,8 +312,9 @@ class ReplayEngine:
                 order['activated'] = True
                 if order['state'] == 'pending':
                     order['state'] = 'active'
-                same_book = row['bids'] if buy else row['asks']
-                order['queue'] = sum(q for p, q in same_book if p == order['price'])
+                if self.config.model == 'queue_touch':
+                    same_book = row['bids'] if buy else row['asks']
+                    order['queue'] = sum(q for p, q in same_book if p == order['price'])
                 # A newly arriving limit may cross. Execute only visible liquidity
                 # satisfying the limit, preserving quantity and price impact.
                 if order['post_only'] and (book[0][0] <= order['price'] if buy else book[0][0] >= order['price']):
