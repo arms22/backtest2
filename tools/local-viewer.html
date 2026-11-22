@@ -1,0 +1,2214 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="color-scheme" content="light dark" />
+<link rel="icon" href="data:," />
+<title>バックテスト結果ローカル版</title>
+<style>
+  :root{
+    --bg:#eef1f5; --surface:#ffffff; --surface2:#e2e8f0; --ink:#0f172a; --muted:#64748b;
+    --border:#cbd5e1; --accent:#0d9488; --accent-ink:#ffffff;
+    --gain:#0d9488; --loss:#dc2626; --chip:#e2e8f0;
+    --shadow:none;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0f172a; --surface:#1e293b; --surface2:#273549; --ink:#e2e8f0; --muted:#94a3b8;
+      --border:#334155; --accent:#2dd4bf; --accent-ink:#06231e;
+      --gain:#2dd4bf; --loss:#f87171; --chip:#273549;
+      --shadow:none;
+    }
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font-family:"Hiragino Kaku Gothic ProN","Hiragino Sans","Yu Gothic UI","Noto Sans JP",system-ui,-apple-system,"Segoe UI",sans-serif;
+    font-size:15px;line-height:1.55}
+  button,[role="button"],select,summary,input:not([type="checkbox"],[type="radio"]){min-height:2.25rem}
+  button{font:inherit;cursor:pointer}
+  .num{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-variant-numeric:tabular-nums lining-nums;white-space:nowrap}
+  .gain{color:var(--gain)} .loss{color:var(--loss)}
+  .muted{color:var(--muted)} .small{font-size:.82rem}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.86em;word-break:break-all}
+  main{max-width:1120px;margin:0 auto;padding:20px 16px 64px}
+  h1{font-size:1.45rem;line-height:1.3;margin:0 0 4px;letter-spacing:.01em}
+  h2{font-size:1.12rem;margin:0 0 10px}
+  h3{font-size:.98rem;margin:0 0 8px}
+  .lead{color:var(--muted);margin:0 0 16px;max-width:46em}
+  /* picker */
+  .picker{background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:16px;margin-bottom:18px}
+  .picker-row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+  .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);background:var(--surface2);color:var(--ink);
+    border-radius:10px;padding:8px 14px;font-weight:600;text-decoration:none}
+  .btn:hover{border-color:var(--accent)}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+  .btn.ghost{background:transparent}
+  .btn:disabled{opacity:.55;cursor:default}
+  .status{margin-top:10px;color:var(--muted);font-size:.9rem;min-height:1.4em}
+  .status .err{color:var(--loss)}
+  .counts{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .count-chip{background:var(--chip);border-radius:999px;padding:3px 11px;font-size:.85rem}
+  .broken-list{margin:8px 0 0;padding-left:1.2em;color:var(--loss);font-size:.88rem}
+  /* search + list */
+  .toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:4px 0 14px}
+  .toolbar input[type="search"]{flex:1 1 240px;border:1px solid var(--border);border-radius:9px;background:var(--surface);color:var(--ink);padding:8px 12px;font:inherit}
+  .exp-list{display:grid;gap:12px}
+  .exp-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:14px 16px;text-align:left;width:100%;color:var(--ink)}
+  .exp-card:hover{border-color:var(--accent)}
+  .exp-head{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+  .exp-name{font-size:1.05rem;font-weight:700}
+  .badge{background:var(--surface2);color:var(--ink);border-radius:6px;padding:1px 7px;font-size:.72rem;font-weight:600}
+  .exp-path{color:var(--muted);font-size:.82rem}
+  .exp-meta{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:8px;font-size:.9rem}
+  .exp-meta b{font-weight:600}
+  .exp-meta .k{color:var(--muted);font-size:.8rem;margin-right:4px}
+  .empty{background:var(--surface);border:1px dashed var(--border);border-radius:10px;padding:22px;color:var(--muted)}
+  /* detail */
+  .backlink{background:none;border:none;color:var(--accent);font-weight:700;padding:8px 4px;margin-bottom:6px}
+  .crumbs{color:var(--muted);font-size:.85rem;margin-bottom:2px}
+  .section{background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:16px;margin:14px 0}
+  .meta-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:8px 22px;font-size:.92rem}
+  .meta-grid .k{color:var(--muted);font-size:.8rem;display:block}
+  .table-wrap{overflow-x:auto}
+  table{border-collapse:collapse;width:100%;font-size:.9rem}
+  th,td{padding:7px 9px;border-bottom:1px solid var(--border);text-align:right;vertical-align:top}
+  th:first-child,td:first-child{text-align:left}
+  thead th{color:var(--muted);font-size:.8rem;font-weight:600;border-bottom:2px solid var(--border);white-space:nowrap}
+  th.sortable{cursor:pointer;user-select:none}
+  th.sortable:hover{color:var(--accent)}
+  tbody tr.clickable{cursor:pointer}
+  tbody tr.clickable:hover td{background:var(--surface2)}
+  td.case-name{font-weight:600;min-width:220px;max-width:340px;white-space:normal;word-break:break-word;overflow-wrap:anywhere;text-align:left;line-height:1.45}
+  /* case comparison: keep the case-name column readable and pinned while scrolling sideways */
+  table.case-table th:first-child,table.case-table td:first-child{position:sticky;left:0;background:var(--surface)}
+  table.case-table thead th:first-child{z-index:3;min-width:220px;white-space:normal}
+  table.case-table tbody td:first-child{z-index:1;border-right:2px solid var(--border)}
+  table.case-table tbody tr.clickable:hover td:first-child{background:var(--surface2)}
+  /* chart */
+  /* readout band: fixed height set from the grid row count (JS sets the
+     inline height), so showing or clearing values never moves anything */
+  .readout{border-radius:10px;background:var(--surface2);padding:6px 12px;margin-bottom:8px;display:flex;align-items:flex-start;overflow:hidden;min-height:40px}
+  .readout-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:4px 12px;width:100%}
+  .curve-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .curve-tabs button{border:none;background:var(--surface2);color:var(--muted);border-radius:999px;padding:4px 11px;font-size:.8rem;min-height:1.9rem}
+  .curve-tabs button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  .readout-cell{min-width:0}
+  .readout-cell .rk{display:block;color:var(--muted);font-size:12px;line-height:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .readout-cell .rv{display:block;font-weight:600;font-size:15px;line-height:19px;text-align:right;min-height:19px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .readout-hint{color:var(--muted);font-size:13px;line-height:19px}
+  .chart-box{position:relative}
+  .chart-box svg{display:block;width:100%;height:auto;touch-action:pan-y}
+  .chart-box svg text{fill:var(--muted)}
+  .chart-box svg line.grid{stroke:var(--border)}
+  .chart-box svg line.zero{stroke:var(--muted)}
+  .chart-box svg line.xh{stroke:var(--muted)}
+  .chart-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.85rem;margin-top:6px}
+  .chart-legend .dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px}
+  /* snapshot banner */
+  .snapshot-banner{border:1px solid var(--accent);background:var(--surface2);border-radius:9px;padding:9px 12px;margin-bottom:12px;font-size:.92rem}
+  .snapshot-banner b{color:var(--accent)}
+  /* synced panels + range control */
+  .panel-label{font-size:.95rem;font-weight:600;color:var(--muted);margin:10px 0 2px}
+  .panel-label:first-of-type{margin-top:2px}
+  .toggle-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;align-items:center}
+  .toggle-tabs .sep{width:1px;height:20px;background:var(--border);margin:0 2px}
+  .toggle-tabs .grp-label{font-size:.75rem;color:var(--muted)}
+  .toggle-tabs button{border:none;background:var(--surface2);color:var(--muted);border-radius:999px;padding:4px 11px;font-size:.8rem;min-height:1.9rem}
+  .toggle-tabs button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  .toggle-tabs button:disabled{opacity:.5;cursor:default}
+  .range-wrap{margin-top:12px}
+  .range-bar{position:relative;height:56px;border:1px solid var(--border);border-radius:9px;background:var(--surface);overflow:hidden;user-select:none}
+  .range-bar svg.mini{position:absolute;inset:0;width:100%;height:100%}
+  .range-shade{position:absolute;top:0;bottom:0;background:var(--ink);opacity:.10;pointer-events:none}
+  .range-window{position:absolute;top:0;bottom:0;border-top:2px solid var(--accent);border-bottom:2px solid var(--accent);cursor:grab;touch-action:none}
+  .range-seek{position:absolute;inset:0;touch-action:none}
+  .range-handle{position:absolute;top:0;bottom:0;width:32px;margin-left:-16px;display:flex;align-items:center;justify-content:center;cursor:ew-resize;touch-action:none;z-index:2}
+  .range-handle span{display:block;width:10px;height:36px;border-radius:5px;background:var(--accent);box-shadow:var(--shadow)}
+  .range-ends{display:flex;justify-content:space-between;font-size:.8rem;color:var(--muted);margin-top:3px}
+  .range-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:8px}
+  .range-controls .lbl{font-size:.82rem;color:var(--muted)}
+  .range-controls button{border:none;background:var(--surface2);color:var(--muted);border-radius:999px;padding:4px 11px;font-size:.8rem;min-height:1.9rem}
+  .range-controls button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  .range-controls .zoom-label{font-size:.85rem;background:var(--surface2);border-radius:7px;padding:4px 10px}
+  /* markout split charts: one small bar chart per series, shared scale */
+  .markout-grid{display:grid;gap:6px 22px;margin-top:14px}
+  @media (min-width:700px){ .markout-grid{grid-template-columns:1fr 1fr} }
+  /* markout text is sized like body text: the small charts sit in a
+     half-width column, so their labels, readout band and axis numbers
+     get explicit larger sizes instead of the compact chart defaults.
+     The readout band height is set in JS to match these sizes and
+     stays fixed whether values are shown or not. */
+  .markout-block .panel-label{margin-top:2px;font-size:.98rem;font-weight:700;color:var(--ink)}
+  .markout-block .readout-grid{grid-template-columns:repeat(3,1fr)}
+  .markout-block .readout-cell .rk{font-size:12px;line-height:15px}
+  .markout-block .readout-cell .rv{font-size:14px;line-height:18px}
+  /* markdown */
+  .md-toggle{display:flex;gap:6px;margin-bottom:10px}
+  .md-toggle button{border:none;background:var(--surface2);color:var(--muted);border-radius:999px;padding:4px 11px;font-size:.8rem;min-height:1.9rem}
+  .md-toggle button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  .md-body{font-size:.94rem;overflow-wrap:break-word}
+  .md-body h1{font-size:1.25rem;margin:.7em 0 .4em}.md-body h2{font-size:1.12rem;margin:.8em 0 .4em}
+  .md-body h3{font-size:1rem;margin:.8em 0 .35em}.md-body h4,.md-body h5,.md-body h6{font-size:.95rem;margin:.7em 0 .3em}
+  .md-body p{margin:.45em 0}.md-body ul,.md-body ol{margin:.4em 0;padding-left:1.5em}
+  .md-body blockquote{margin:.5em 0;padding:.2em 0 .2em .9em;border-left:3px solid var(--border);color:var(--muted)}
+  .md-body code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.86em;background:var(--surface2);border-radius:5px;padding:.08em .35em}
+  .md-body pre{background:var(--surface2);border-radius:9px;padding:10px 12px;overflow-x:auto}
+  .md-body pre code{background:none;padding:0}
+  .md-body table{font-size:.86rem;margin:.5em 0}
+  .md-body a{color:var(--accent)}
+  pre.raw{white-space:pre-wrap;word-break:break-word;background:var(--surface2);border-radius:9px;padding:12px;font-size:.84rem;max-height:480px;overflow:auto;margin:0}
+  /* case detail */
+  .metric-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+  .metric{border:none;border-radius:10px;padding:10px 12px;background:var(--surface2)}
+  .metric .k{color:var(--muted);font-size:.78rem;display:block}
+  .metric .v{font-size:1.06rem;font-weight:700}
+  .group-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px}
+  .group-tabs button{border:none;background:var(--surface2);color:var(--muted);border-radius:999px;padding:4px 11px;font-size:.8rem;min-height:1.9rem}
+  .group-tabs button.on{background:var(--accent);color:var(--accent-ink);font-weight:600}
+  .bars{display:grid;gap:5px;margin-bottom:14px}
+  .bar-row{display:grid;grid-template-columns:minmax(90px,180px) 1fr minmax(86px,auto);gap:10px;align-items:center;font-size:.86rem}
+  .bar-track{position:relative;height:16px;background:var(--surface2);border-radius:4px}
+  .bar-fill{position:absolute;top:2px;bottom:2px;border-radius:3px}
+  .bar-key{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  details.jsonbox{margin-top:6px}
+  details.jsonbox summary{cursor:pointer;color:var(--accent);font-weight:600;padding:6px 0}
+  .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+  footer{color:var(--muted);font-size:.82rem;margin-top:28px}
+  @media (max-width:640px){
+    td.case-name{min-width:180px}
+    table.case-table thead th:first-child{min-width:180px}
+    .bar-row{grid-template-columns:minmax(70px,110px) 1fr minmax(76px,auto)}
+    th,td{padding:6px 6px}
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>バックテスト結果（ローカル版）</h1>
+  <p class="lead">パソコン上の結果フォルダを選ぶと、ブラウザの中だけで読み取って表示します。データは外部に送られません。読み込んだ結果は「結果を含めて保存」で、結果入りのHTMLファイル（スナップショット）として書き出せます。</p>
+
+  <div class="snapshot-banner" id="snapshot-banner" hidden></div>
+
+  <div class="picker">
+    <div class="picker-row">
+      <button class="btn primary" id="btn-pick" type="button">フォルダを選ぶ</button>
+      <button class="btn" id="btn-pick-fallback" type="button">フォルダを選ぶ（予備の方法）</button>
+      <input type="file" id="dir-input" webkitdirectory directory multiple hidden />
+      <button class="btn" id="btn-reload" type="button" disabled>再読み込み</button>
+      <button class="btn ghost" id="btn-save" type="button" disabled>結果を含めて保存</button>
+    </div>
+    <p class="small muted" style="margin:10px 0 0">このページ自体が1つのHTMLファイルです。ファイルそのものをコピーすれば、そのまま別のパソコンでも使えます。「結果を含めて保存」は、読み込んだ結果を埋め込んだスナップショットのファイルを書き出します。</p>
+    <div class="status" id="status">まだフォルダが選ばれていません。bitcoinフォルダ全体、リポジトリ、analysis、チャットのフォルダ、実験フォルダ単体のどれでも選べます。</div>
+    <div class="counts" id="counts" hidden></div>
+    <ul class="broken-list" id="broken-list" hidden></ul>
+  </div>
+
+  <div id="view"></div>
+
+  <footer>読むファイルは summary.csv / results.json / match_summary.csv / audit_checks.json / REPORT.md / README.md と、約定単位カーブのための約定台帳（*_fills.jsonl.gz）、価格表示のための市場データ（market_data の query_results.jsonl.gz）だけです。注文・約定突き合わせ台帳（*_orders.jsonl.gz / *_matches.jsonl.gz など）は読みません。名前に trial を含む実験は対象外です。</footer>
+</main>
+<script>
+"use strict";
+/* ============ utilities ============ */
+var $ = function(s, r){ return (r||document).querySelector(s); };
+function esc(s){ return String(s==null?"":s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+function num(v, d){ var n = (typeof v === "number") ? v : parseFloat(v); return isFinite(n) ? n : (d||0); }
+function isNum(v){ return typeof v === "number" && isFinite(v); }
+function fmtYen(v, digits){
+  if(!isNum(v)) return "—";
+  return v.toLocaleString("ja-JP",{minimumFractionDigits:(digits==null?2:digits), maximumFractionDigits:(digits==null?2:digits)});
+}
+function fmtInt(v){ if(!isNum(v)) return "—"; return Math.round(v).toLocaleString("ja-JP"); }
+function fmtPct(v){ if(!isNum(v)) return "—"; return (v*100).toFixed(2) + "%"; }
+function fmtNum(v, d){ if(!isNum(v)) return "—"; return v.toLocaleString("ja-JP",{minimumFractionDigits:d||0, maximumFractionDigits:(d==null?4:d)}); }
+function pnlClass(v){ return isNum(v) ? (v > 0 ? "gain" : (v < 0 ? "loss" : "")) : ""; }
+function pnlHtml(v, digits){ return '<span class="num ' + pnlClass(v) + '">' + fmtYen(v, digits) + "</span>"; }
+function fmtTsUTC(iso){
+  if(!iso) return "—";
+  var d = new Date(iso); if(isNaN(d)) return String(iso);
+  return d.toLocaleString("ja-JP",{timeZone:"UTC", year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) + " UTC";
+}
+function fmtTsJST(iso){
+  if(!iso) return "";
+  var d = new Date(iso); if(isNaN(d)) return "";
+  return d.toLocaleString("ja-JP",{timeZone:"Asia/Tokyo", year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"}) + " JST";
+}
+function fmtEpochJST(sec){
+  var d = new Date(sec*1000);
+  return d.toLocaleString("ja-JP",{timeZone:"Asia/Tokyo", month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit"});
+}
+function fmtEpochJSTS(sec){
+  var d = new Date(sec*1000);
+  return d.toLocaleString("ja-JP",{timeZone:"Asia/Tokyo", month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit"});
+}
+function fmtMtime(ms){
+  if(!ms) return "—";
+  return new Date(ms).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo", year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"});
+}
+function fmtLatency(sec){
+  if(!isNum(sec)) return "—";
+  var s = String(parseFloat(sec.toFixed(4)));
+  if(sec > 0 && sec < 1) return Math.round(sec * 1000) + "ミリ秒（" + s + "秒）";
+  return s + "秒";
+}
+
+/* ============ CSV ============ */
+function parseCSV(text){
+  if(text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  var rows = [], row = [], field = "", inQ = false, i, c;
+  for(i = 0; i < text.length; i++){
+    c = text[i];
+    if(inQ){
+      if(c === '"'){ if(text[i+1] === '"'){ field += '"'; i++; } else inQ = false; }
+      else field += c;
+    } else if(c === '"'){ inQ = true; }
+    else if(c === ","){ row.push(field); field = ""; }
+    else if(c === "\n"){ row.push(field); field = ""; rows.push(row); row = []; }
+    else if(c === "\r"){ /* skip */ }
+    else field += c;
+  }
+  if(field !== "" || row.length){ row.push(field); rows.push(row); }
+  if(!rows.length) return [];
+  var head = rows[0].map(function(h){ return h.replace(/^\ufeff/, "").trim(); });
+  var out = [];
+  for(i = 1; i < rows.length; i++){
+    if(rows[i].length === 1 && rows[i][0] === "") continue;
+    var o = {};
+    for(var j = 0; j < head.length; j++) o[head[j]] = rows[i][j];
+    out.push(o);
+  }
+  return out;
+}
+
+/* ============ markdown (small, safe) ============ */
+function mdInline(s){
+  s = esc(s);
+  s = s.replace(/`([^`]+)`/g, "<code>$1</code>");
+  s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  s = s.replace(/__([^_]+)__/g, "<strong>$1</strong>");
+  s = s.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+  s = s.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  return s;
+}
+function renderMarkdown(src){
+  var lines = String(src||"").replace(/\r\n?/g,"\n").split("\n");
+  var html = [], i = 0, m;
+  function isTableSep(l){ return /^\s*\|?[\s:|-]+\|?\s*$/.test(l) && l.indexOf("-") >= 0; }
+  while(i < lines.length){
+    var line = lines[i];
+    if(/^\s*```/.test(line)){
+      var buf = []; i++;
+      while(i < lines.length && !/^\s*```/.test(lines[i])){ buf.push(lines[i]); i++; }
+      i++;
+      html.push("<pre><code>" + esc(buf.join("\n")) + "</code></pre>");
+      continue;
+    }
+    if(line.indexOf("|") >= 0 && i + 1 < lines.length && isTableSep(lines[i+1])){
+      var head = line.split("|").map(function(x){return x.trim();}).filter(function(x,idx,arr){ return !(idx===0&&x==="") && !(idx===arr.length-1&&x===""); });
+      i += 2; var bodyRows = [];
+      while(i < lines.length && lines[i].indexOf("|") >= 0 && lines[i].trim() !== ""){
+        bodyRows.push(lines[i].split("|").map(function(x){return x.trim();}).filter(function(x,idx,arr){ return !(idx===0&&x==="") && !(idx===arr.length-1&&x===""); }));
+        i++;
+      }
+      var t = "<table><thead><tr>" + head.map(function(h){return "<th>" + mdInline(h) + "</th>";}).join("") + "</tr></thead><tbody>";
+      bodyRows.forEach(function(r){ t += "<tr>" + r.map(function(c){return "<td>" + mdInline(c) + "</td>";}).join("") + "</tr>"; });
+      html.push(t + "</tbody></table>");
+      continue;
+    }
+    if((m = line.match(/^(#{1,6})\s+(.*)$/))){ var lv = Math.min(m[1].length + 1, 6); html.push("<h" + lv + ">" + mdInline(m[2]) + "</h" + lv + ">"); i++; continue; }
+    if(/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)){ html.push("<hr>"); i++; continue; }
+    if(/^\s*>\s?/.test(line)){
+      var qb = [];
+      while(i < lines.length && /^\s*>\s?/.test(lines[i])){ qb.push(lines[i].replace(/^\s*>\s?/, "")); i++; }
+      html.push("<blockquote>" + qb.map(function(q){ return "<p>" + mdInline(q) + "</p>"; }).join("") + "</blockquote>");
+      continue;
+    }
+    if(/^\s*[-*+]\s+/.test(line)){
+      var ul = [];
+      while(i < lines.length && /^\s*[-*+]\s+/.test(lines[i])){ ul.push(lines[i].replace(/^\s*[-*+]\s+/, "")); i++; }
+      html.push("<ul>" + ul.map(function(u){ return "<li>" + mdInline(u) + "</li>"; }).join("") + "</ul>");
+      continue;
+    }
+    if(/^\s*\d+[.)]\s+/.test(line)){
+      var ol = [];
+      while(i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])){ ol.push(lines[i].replace(/^\s*\d+[.)]\s+/, "")); i++; }
+      html.push("<ol>" + ol.map(function(u){ return "<li>" + mdInline(u) + "</li>"; }).join("") + "</ol>");
+      continue;
+    }
+    if(line.trim() === ""){ i++; continue; }
+    var pb = [line]; i++;
+    while(i < lines.length && lines[i].trim() !== "" && !/^(#{1,6})\s/.test(lines[i]) && !/^\s*```/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) && !/^\s*\d+[.)]\s+/.test(lines[i]) && !/^\s*>/.test(lines[i])){ pb.push(lines[i]); i++; }
+    html.push("<p>" + pb.map(mdInline).join("<br>") + "</p>");
+  }
+  return html.join("\n");
+}
+/* ============ folder scanning ============ */
+var WANTED = {"results.json":1, "summary.csv":1, "match_summary.csv":1, "audit_checks.json":1, "REPORT.md":1, "README.md":1, "query_results.jsonl.gz":1};
+function isWanted(name){ return !!WANTED[name] || /_fills\.jsonl\.gz$/.test(name); }
+var SKIP_DIRS = {".git":1, "node_modules":1, "__pycache__":1, ".space-build":1, ".hg":1, ".svn":1};
+var state = { rootName:"", files:null, experiments:[], trialCount:0, broken:[], current:null, currentCase:null, groupBy:"position_direction", sortKey:"gross_pnl", sortDir:-1, mdMode:{}, curveMode:"hourly",
+  dirHandle:null, fileList:null, lastLoaded:0, searchQuery:"", snapshot:null, chartPrefs:{}, overlayPrefs:{} };
+/* Source of this very script and of the static <main>, captured before
+   anything renders: the snapshot export rebuilds a complete standalone
+   file from these two pieces plus the embedded result data. */
+var APP_SOURCE = document.currentScript ? document.currentScript.textContent : "";
+var MAIN_HTML = document.querySelector("main") ? document.querySelector("main").outerHTML : "";
+
+function setStatus(html){ $("#status").innerHTML = html; }
+
+async function collectFromHandle(dirHandle, prefix, out, depth){
+  if(depth > 10) return;
+  for await (var entry of dirHandle.values()){
+    var rel = prefix ? prefix + "/" + entry.name : entry.name;
+    if(entry.kind === "directory"){
+      if(SKIP_DIRS[entry.name]) continue;
+      await collectFromHandle(entry, rel, out, depth + 1);
+    } else if(entry.kind === "file" && isWanted(entry.name)){
+      (function(h, r){
+        out.set(r, { name: entry.name, lastModified: 0, getFile: function(){ return h.getFile(); },
+          getBlob: function(){ return h.getFile(); },
+          getText: async function(){ var f = await h.getFile(); return await f.text(); } });
+      })(entry, rel);
+    }
+  }
+}
+function collectFromFileList(fileList){
+  var out = new Map();
+  for(var i = 0; i < fileList.length; i++){
+    var f = fileList[i];
+    if(!isWanted(f.name)) continue;
+    var rel = (f.webkitRelativePath || f.name).split("/").slice(1).join("/") || f.name;
+    (function(file, r){
+      out.set(r, { name: file.name, lastModified: file.lastModified || 0,
+        getFile: function(){ return Promise.resolve(file); },
+        getBlob: function(){ return file; },
+        getText: function(){ return file.text(); } });
+    })(f, rel);
+  }
+  return out;
+}
+async function fillMtimes(files){
+  for(var e of files.values()){
+    if(!e.lastModified && e.getFile){ try { var f = await e.getFile(); e.lastModified = f.lastModified || 0; } catch(_){ } }
+  }
+}
+function dirOf(p){ var i = p.lastIndexOf("/"); return i < 0 ? "" : p.slice(0, i); }
+function baseOf(p){ var i = p.lastIndexOf("/"); return i < 0 ? p : p.slice(i + 1); }
+
+function botName(codeSha, expName){
+  if(codeSha && typeof codeSha === "object"){
+    for(var key of Object.keys(codeSha)){
+      var m = key.match(/backtests\/([^/]+)\.py$/);
+      if(m) return m[1];
+    }
+  }
+  return (expName || "").split("_")[0] || expName;
+}
+
+async function loadExperiments(files){
+  var byDir = new Map();
+  files.forEach(function(e, rel){
+    var d = dirOf(rel);
+    if(!byDir.has(d)) byDir.set(d, {});
+    byDir.get(d)[e.name] = e;
+  });
+  var experiments = [], broken = [], trialCount = 0;
+  for(var pair of byDir.entries()){
+    var dir = pair[0], bag = pair[1];
+    if(!bag["results.json"]) continue;
+    var expName = baseOf(dir) || state.rootName;
+    var isTrial = /trial/.test(expName);
+    var rawText;
+    try { rawText = await bag["results.json"].getText(); }
+    catch(_){ if(!isTrial) broken.push({dir: dir, name: expName}); continue; }
+    var raw;
+    try { raw = JSON.parse(rawText); if(!raw || typeof raw !== "object" || !Array.isArray(raw.results)) throw new Error("shape"); }
+    catch(_){ if(!isTrial) broken.push({dir: dir, name: expName}); continue; }
+    if(isTrial){ trialCount++; continue; }
+    if(!bag["summary.csv"]) continue;
+    var audit = null;
+    if(bag["audit_checks.json"]){
+      try { audit = JSON.parse(await bag["audit_checks.json"].getText()); } catch(_){ audit = null; }
+    }
+    var checks = (audit && Array.isArray(audit.checks)) ? audit.checks : [];
+    var cases = raw.results.map(function(r){
+      var chk = null;
+      for(var ci = 0; ci < checks.length; ci++){ if(checks[ci].name === r.name){ chk = checks[ci]; break; } }
+      return { raw: r, name: r.name || "", label: r["case"] || r.name || "", audit: chk };
+    });
+    cases.sort(function(a,b){ return num(b.raw.gross_pnl) - num(a.raw.gross_pnl); });
+    var first = cases[0] ? cases[0].raw : {};
+    experiments.push({
+      dir: dir, name: expName, bag: bag, raw: raw, cases: cases,
+      bot: botName(raw.code_sha256, expName),
+      product: (raw.input_manifest && raw.input_manifest.tags && raw.input_manifest.tags.product_code) || "",
+      startUtc: raw.start_utc || (raw.input_manifest && raw.input_manifest.start_utc) || "",
+      endUtc: raw.end_utc_exclusive || (raw.input_manifest && raw.input_manifest.end_utc_exclusive) || "",
+      model: (first.config && first.config.model) || "",
+      latency: first.config ? first.config.latency : undefined,
+      cancelLatency: first.config ? first.config.cancel_latency : undefined,
+      mtime: bag["results.json"].lastModified || 0,
+      auditTotal: checks.length,
+      auditPass: checks.filter(function(c){ return c.flat === true; }).length,
+      best: cases[0] || null,
+      matchRows: null, reportText: undefined, memoText: undefined
+    });
+  }
+  experiments.sort(function(a,b){ return (b.mtime - a.mtime) || a.name.localeCompare(b.name); });
+  return { experiments: experiments, broken: broken, trialCount: trialCount };
+}
+
+async function scan(files, rootName, opts){
+  opts = opts || {};
+  /* what is on screen now, so a reload can restore the same view */
+  var prevDir = state.current ? state.current.dir : null;
+  var prevCase = state.currentCase ? state.currentCase.name : null;
+  var hadView = !!state.current;
+  state.files = files; state.rootName = rootName;
+  state.snapshot = null;
+  $("#snapshot-banner").hidden = true;
+  state.current = null; state.currentCase = null;
+  setStatus("読み取り中です…（対象ファイル " + files.size + " 件）");
+  $("#counts").hidden = true; $("#broken-list").hidden = true;
+  await fillMtimes(files);
+  var res = await loadExperiments(files);
+  state.experiments = res.experiments; state.broken = res.broken; state.trialCount = res.trialCount;
+  state.lastLoaded = Date.now();
+  $("#btn-reload").disabled = !(state.dirHandle || state.fileList);
+  $("#btn-save").disabled = !state.experiments.length;
+  var chips = [];
+  chips.push('<span class="count-chip">実験 ' + res.experiments.length + " 件</span>");
+  if(res.trialCount) chips.push('<span class="count-chip">trial を対象外 ' + res.trialCount + " 件</span>");
+  if(res.broken.length) chips.push('<span class="count-chip">読み取れなかった ' + res.broken.length + " 件</span>");
+  $("#counts").innerHTML = chips.join("");
+  $("#counts").hidden = false;
+  if(res.broken.length){
+    $("#broken-list").innerHTML = res.broken.map(function(b){
+      return "<li>読み取れなかったフォルダ: " + esc(b.dir || b.name) + "（results.json を読めませんでした）</li>";
+    }).join("");
+    $("#broken-list").hidden = false;
+  }
+  if(!res.experiments.length){
+    setStatus('<span class="err">実験が見つかりませんでした。</span> results.json と summary.csv の両方があるフォルダが実験です。選んだフォルダ：' + esc(rootName));
+  } else {
+    setStatus("読み取りが終わりました。選んだフォルダ：" + esc(rootName));
+  }
+  if(opts.preserve && hadView){
+    var target = null;
+    state.experiments.forEach(function(e){ if(e.dir === prevDir) target = e; });
+    if(target){
+      if(prevCase){
+        var tc = null;
+        target.cases.forEach(function(c){ if(c.name === prevCase) tc = c; });
+        if(tc){ renderCase(target, tc); return; }
+      }
+      renderExperiment(target); return;
+    }
+  }
+  renderList(state.searchQuery || "");
+}
+
+function openFolderHistory(){
+  return new Promise(function(resolve, reject){
+    var request = window.indexedDB.open("backtest-local-viewer", 1);
+    request.onupgradeneeded = function(){ request.result.createObjectStore("folders"); };
+    request.onsuccess = function(){ resolve(request.result); };
+    request.onerror = function(){ reject(request.error); };
+    request.onblocked = function(){ resolve(null); };
+  }).catch(function(){ return null; });
+}
+
+var folderHistory = window.showDirectoryPicker ? openFolderHistory() : Promise.resolve(null);
+var lastPickedFolder = folderHistory.then(function(db){
+  if(!db) return null;
+  return new Promise(function(resolve){
+    var request = db.transaction("folders").objectStore("folders").get("last");
+    request.onsuccess = function(){ resolve(request.result || null); };
+    request.onerror = function(){ resolve(null); };
+  });
+}).catch(function(){ return null; });
+
+function rememberPickedFolder(handle){
+  lastPickedFolder = Promise.resolve(handle);
+  folderHistory.then(function(db){
+    if(db) db.transaction("folders", "readwrite").objectStore("folders").put(handle, "last");
+  }).catch(function(){});
+}
+async function pickFolder(){
+  if(window.showDirectoryPicker){
+    try {
+      var previous = await lastPickedFolder;
+      var handle = await window.showDirectoryPicker({
+        id:"backtest-local-viewer", startIn:previous || "documents"
+      });
+      rememberPickedFolder(handle);
+      var out = new Map();
+      setStatus("フォルダを走査中です…");
+      await collectFromHandle(handle, "", out, 0);
+      state.dirHandle = handle; state.fileList = null;
+      await scan(out, handle.name || "");
+    } catch(e){
+      if(e && e.name === "AbortError") return;
+      setStatus('<span class="err">フォルダを読めませんでした。</span>下の「予備の方法」も試せます。');
+    }
+  } else {
+    $("#dir-input").click();
+  }
+}
+
+async function reloadFolder(){
+  var btn = $("#btn-reload");
+  if(state.snapshot){
+    setStatus("スナップショット表示中は再読み込みできません。新しい結果を見るには、元のファイルでフォルダを選び直してください。");
+    return;
+  }
+  btn.disabled = true;
+  try {
+    if(state.dirHandle){
+      var perm = "granted";
+      try {
+        if(state.dirHandle.queryPermission) perm = await state.dirHandle.queryPermission({mode:"read"});
+        if(perm !== "granted" && state.dirHandle.requestPermission) perm = await state.dirHandle.requestPermission({mode:"read"});
+      } catch(_){ perm = "denied"; }
+      if(perm !== "granted"){
+        setStatus('<span class="err">フォルダへのアクセス許可が切れています。</span>「フォルダを選ぶ」から同じフォルダを選び直してください。');
+        return;
+      }
+      setStatus("再読み込み中です…");
+      var out = new Map();
+      await collectFromHandle(state.dirHandle, "", out, 0);
+      await scan(out, state.rootName, {preserve:true});
+    } else if(state.fileList){
+      setStatus("再読み込み中です…");
+      await scan(collectFromFileList(state.fileList), state.rootName, {preserve:true});
+    }
+  } catch(e){
+    setStatus('<span class="err">再読み込みできませんでした。</span>「フォルダを選ぶ」から選び直してください。');
+  } finally {
+    btn.disabled = !(state.dirHandle || state.fileList) && !state.snapshot;
+    if(state.snapshot) btn.disabled = true;
+  }
+}
+/* ============ chart palette ============ */
+var PALETTE = ["#0d9488","#b3541e","#205f9e","#8a6d1a","#7a3b8f","#a02c4e","#3f7a1e","#64748b","#0e7490","#9e2b25"];
+function chartColor(i){ return PALETTE[i % PALETTE.length]; }
+var PRICE_COLOR = "#d97706";
+var DIM_COLOR = "#64748b";
+
+/* ============ gzip line streaming (market files are large) ============ */
+async function streamGzipLines(entry, onLine){
+  var blob = await entry.getBlob();
+  if(!window.DecompressionStream) throw new Error("DecompressionStream unsupported");
+  var stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
+  var reader = stream.getReader();
+  var decoder = new TextDecoder();
+  var buf = "";
+  while(true){
+    var r = await reader.read();
+    if(r.done) break;
+    buf += decoder.decode(r.value, {stream: true});
+    var idx;
+    while((idx = buf.indexOf("\n")) >= 0){
+      var line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+      if(line) onLine(line);
+    }
+    if(buf.length > (1 << 22)) buf = ""; /* a line far longer than any data row: drop it */
+  }
+  buf += decoder.decode();
+  if(buf.trim()) onLine(buf);
+}
+
+/* ============ market prices (1s close, fallback ltp) ============ */
+function isoStamp(iso){
+  var d = new Date(iso); if(isNaN(d)) return null;
+  function p(n){ return String(n).padStart(2, "0"); }
+  return d.getUTCFullYear() + p(d.getUTCMonth() + 1) + p(d.getUTCDate()) + "T" + p(d.getUTCHours()) + p(d.getUTCMinutes()) + p(d.getUTCSeconds()) + "Z";
+}
+/* analysis/market_data/<product>/<product>_<start>_<end>_1s/query_results.jsonl.gz
+   anywhere under the picked folder. */
+function marketEntry(exp){
+  if(exp._marketEntry !== undefined) return exp._marketEntry;
+  exp._marketEntry = null;
+  var product = exp.product, s = isoStamp(exp.startUtc), e = isoStamp(exp.endUtc);
+  if(product && s && e && state.files){
+    var suffix = "market_data/" + product + "/" + product + "_" + s + "_" + e + "_1s/query_results.jsonl.gz";
+    state.files.forEach(function(en, rel){
+      if(!exp._marketEntry && (rel === suffix || rel.endsWith("/" + suffix))) exp._marketEntry = en;
+    });
+  }
+  return exp._marketEntry;
+}
+function hasMarketData(exp){
+  if(marketEntry(exp)) return true;
+  /* snapshot files carry the prices themselves */
+  return !!(exp._prices && exp._prices.size);
+}
+/* Stream the 1s market file and pick closes for the wanted epoch
+   seconds into exp._prices (Map sec -> price). Seconds already tried
+   are not streamed for again. */
+async function loadPrices(exp, seconds){
+  if(!exp._prices) exp._prices = new Map();
+  if(!exp._priceTried) exp._priceTried = new Set();
+  var entry = marketEntry(exp);
+  if(!entry || !entry.getBlob) return exp._prices;
+  var wanted = new Map();
+  seconds.forEach(function(sec){
+    sec = Math.floor(sec);
+    if(!exp._priceTried.has(sec)){ exp._priceTried.add(sec); wanted.set(new Date(sec * 1000).toISOString().slice(0, 19), sec); }
+  });
+  if(!wanted.size) return exp._prices;
+  try {
+    await streamGzipLines(entry, function(line){
+      var m = line.slice(0, 42).match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+      if(!m) return;
+      var sec = wanted.get(m[0]);
+      if(sec === undefined || exp._prices.has(sec)) return;
+      var cm = line.match(/"close":\s*(-?[0-9][0-9.eE+-]*)/) || line.match(/"ltp":\s*(-?[0-9][0-9.eE+-]*)/);
+      if(cm){ var v = parseFloat(cm[1]); if(isFinite(v)) exp._prices.set(sec, v); }
+    });
+  } catch(e){ /* whatever was collected stands */ }
+  return exp._prices;
+}
+
+/* ============ range bar + presets ============ */
+var RANGE_PRESETS = [ {label:"全期間", sec:null}, {label:"6時間", sec:21600}, {label:"1時間", sec:3600}, {label:"30分", sec:1800} ];
+function fmtZoomRange(z){ return fmtEpochJST(z.start) + " 〜 " + fmtEpochJST(z.end) + " JST"; }
+/* overview: [{points:[[t,v],...], color}] mini-curves over the full domain.
+   opts: {fullStart, fullEnd, overview, zoom, onChange(zoom|null)}.
+   Dragging the window pans it, the edge handles resize it, and
+   dragging the background centers the window on the pointer (seek). */
+function mountRangeControl(container, opts){
+  var fs = opts.fullStart, fe = opts.fullEnd, span = fe - fs;
+  if(!(span > 0)){ container.innerHTML = ""; return { setZoom: function(){}, getZoom: function(){ return null; } }; }
+  var zoom = opts.zoom || null;
+  var W = 880, H = 56;
+  function miniPath(pts){
+    var min = Infinity, max = -Infinity;
+    pts.forEach(function(p){ if(p[1] < min) min = p[1]; if(p[1] > max) max = p[1]; });
+    if(min === max){ min -= 1; max += 1; }
+    var step = Math.max(1, Math.floor(pts.length / 240));
+    var d = "";
+    for(var i = 0; i < pts.length; i += step){
+      var x = (pts[i][0] - fs) / span * W, y = 4 + (max - pts[i][1]) / (max - min) * (H - 8);
+      d += (d ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+    }
+    var lp = pts[pts.length - 1];
+    if(lp) d += "L" + ((lp[0] - fs) / span * W).toFixed(1) + " " + (4 + (max - lp[1]) / (max - min) * (H - 8)).toFixed(1);
+    return d;
+  }
+  var mini = (opts.overview || []).map(function(o){
+    return o.points && o.points.length > 1 ? '<path d="' + miniPath(o.points) + '" fill="none" stroke="' + o.color + '" stroke-width="1.2"/>' : "";
+  }).join("");
+  container.innerHTML =
+    '<div class="range-wrap"><div class="range-bar">' +
+      '<svg class="mini" viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="none" aria-hidden="true">' + mini + "</svg>" +
+      '<div class="range-seek" data-r="seek"></div>' +
+      '<div class="range-shade" data-r="sl"></div><div class="range-shade" data-r="sr"></div>' +
+      '<div class="range-window" data-r="win"></div>' +
+      '<div class="range-handle" data-r="hl" role="slider" tabindex="0" aria-label="表示範囲の開始" aria-valuemin="' + Math.round(fs) + '" aria-valuemax="' + Math.round(fe) + '"><span></span></div>' +
+      '<div class="range-handle" data-r="hr" role="slider" tabindex="0" aria-label="表示範囲の終了" aria-valuemin="' + Math.round(fs) + '" aria-valuemax="' + Math.round(fe) + '"><span></span></div>' +
+    "</div>" +
+    '<div class="range-ends"><span>' + esc(fmtEpochJSTS(fs)) + ' JST</span><span>' + esc(fmtEpochJSTS(fe)) + " JST</span></div>" +
+    '<div class="range-controls"><span class="lbl">表示範囲</span>' +
+      RANGE_PRESETS.map(function(p){ return '<button type="button" data-preset="' + (p.sec == null ? "" : p.sec) + '">' + p.label + "</button>"; }).join("") +
+      '<span class="zoom-label" data-r="zlabel" hidden></span>' +
+      '<button type="button" data-r="reset" hidden>全体に戻す</button>' +
+    "</div></div>";
+  var bar = container.querySelector(".range-bar");
+  var sl = container.querySelector('[data-r="sl"]'), sr = container.querySelector('[data-r="sr"]');
+  var win = container.querySelector('[data-r="win"]');
+  var hl = container.querySelector('[data-r="hl"]'), hr = container.querySelector('[data-r="hr"]');
+  var zlabel = container.querySelector('[data-r="zlabel"]'), resetBtn = container.querySelector('[data-r="reset"]');
+  function cur(){ return zoom || {start: fs, end: fe}; }
+  function layout(){
+    var c = cur();
+    var l = (c.start - fs) / span * 100, r = (c.end - fs) / span * 100;
+    sl.style.left = "0"; sl.style.width = l + "%";
+    sr.style.left = r + "%"; sr.style.width = Math.max(0, 100 - r) + "%";
+    win.style.left = l + "%"; win.style.width = Math.max(0, r - l) + "%";
+    hl.style.left = l + "%"; hr.style.left = r + "%";
+    hl.setAttribute("aria-valuenow", Math.round(c.start));
+    hr.setAttribute("aria-valuenow", Math.round(c.end));
+    hl.setAttribute("aria-valuetext", fmtEpochJSTS(c.start) + " JST");
+    hr.setAttribute("aria-valuetext", fmtEpochJSTS(c.end) + " JST");
+    zlabel.hidden = !zoom; resetBtn.hidden = !zoom;
+    if(zoom) zlabel.textContent = "ズーム中: " + fmtZoomRange(zoom);
+    container.querySelectorAll("[data-preset]").forEach(function(b){
+      var sec = b.getAttribute("data-preset"), on = false;
+      if(sec === "") on = !zoom;
+      else if(zoom){ var s2 = Number(sec); on = Math.abs(zoom.end - fe) <= 1 && Math.abs((zoom.end - zoom.start) - s2) <= Math.max(60, s2 * 0.02); }
+      b.classList.toggle("on", on);
+    });
+  }
+  function emit(s, e){
+    s = Math.max(fs, Math.min(s, e)); e = Math.min(fe, Math.max(s, e));
+    if(!(e > s)) return;
+    zoom = (e - s >= span * 0.995) ? null : {start: s, end: e};
+    layout();
+    opts.onChange(zoom);
+  }
+  var drag = null, minSpan = Math.max(30, span * 0.005);
+  function fracOf(ev){ var rect = bar.getBoundingClientRect(); return Math.min(1, Math.max(0, (ev.clientX - rect.left) / rect.width)); }
+  function seekTo(ev){
+    var w = drag.orig.end - drag.orig.start;
+    var center = fs + fracOf(ev) * span;
+    var s = Math.max(fs, Math.min(center - w / 2, fe - w));
+    emit(s, s + w);
+  }
+  function onMove(ev){
+    if(!drag) return;
+    var rect = bar.getBoundingClientRect(); if(!(rect.width > 0)) return;
+    if(drag.kind === "seek"){ seekTo(ev); return; }
+    if(drag.kind === "pan"){
+      var dx = (ev.clientX - drag.startX) / rect.width * span;
+      var w = drag.orig.end - drag.orig.start;
+      var s = Math.max(fs, Math.min(drag.orig.start + dx, fe - w));
+      emit(s, s + w); return;
+    }
+    var ts = fs + fracOf(ev) * span;
+    if(drag.kind === "left") emit(Math.min(ts, drag.orig.end - minSpan), drag.orig.end);
+    else emit(drag.orig.start, Math.max(ts, drag.orig.start + minSpan));
+  }
+  function onEnd(){ drag = null; }
+  [["seek","seek"],["win","pan"],["hl","left"],["hr","right"]].forEach(function(pair){
+    var el = container.querySelector('[data-r="' + pair[0] + '"]');
+    el.addEventListener("pointerdown", function(ev){
+      ev.preventDefault();
+      if(el.setPointerCapture){ try { el.setPointerCapture(ev.pointerId); } catch(_){ } }
+      drag = {kind: pair[1], orig: cur(), startX: ev.clientX};
+      if(pair[1] === "seek") seekTo(ev);
+    });
+    el.addEventListener("pointermove", onMove);
+    el.addEventListener("pointerup", onEnd);
+    el.addEventListener("pointercancel", onEnd);
+  });
+  function nudge(kind){ return function(ev){
+    var dir = (ev.key === "ArrowLeft" || ev.key === "ArrowDown") ? -1 : (ev.key === "ArrowRight" || ev.key === "ArrowUp") ? 1 : 0;
+    if(!dir) return;
+    ev.preventDefault();
+    var c = cur(), step = span * 0.02 * dir;
+    if(kind === "left") emit(Math.min(c.start + step, c.end - minSpan), c.end);
+    else emit(c.start, Math.max(c.end + step, c.start + minSpan));
+  }; }
+  hl.addEventListener("keydown", nudge("left"));
+  hr.addEventListener("keydown", nudge("right"));
+  container.querySelectorAll("[data-preset]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var sec = b.getAttribute("data-preset");
+      if(sec === ""){ emit(fs, fe); return; }
+      var s = fe - Number(sec);
+      if(s <= fs) emit(fs, fe); else emit(s, fe);
+    });
+  });
+  resetBtn.addEventListener("click", function(){ emit(fs, fe); });
+  layout();
+  return { setZoom: function(z){ zoom = z; layout(); }, getZoom: function(){ return zoom; } };
+}
+
+/* ============ shared chart helpers ============ */
+function strideRows(rows, max){
+  if(rows.length <= max) return rows;
+  var step = Math.ceil(rows.length / max), out = [];
+  for(var i = 0; i < rows.length; i += step) out.push(rows[i]);
+  if(out[out.length - 1] !== rows[rows.length - 1]) out.push(rows[rows.length - 1]);
+  return out;
+}
+function nearestRowByT(rows, t){
+  if(!rows.length) return null;
+  var lo = 0, hi = rows.length - 1;
+  while(lo < hi){ var mid = (lo + hi) >> 1; if(rows[mid].t < t) lo = mid + 1; else hi = mid; }
+  var cand = rows[lo];
+  if(lo > 0 && Math.abs(rows[lo - 1].t - t) <= Math.abs(cand.t - t)) cand = rows[lo - 1];
+  return cand;
+}
+function nearestPointByT(pts, t){
+  if(!pts.length) return null;
+  var lo = 0, hi = pts.length - 1;
+  while(lo < hi){ var mid = (lo + hi) >> 1; if(pts[mid][0] < t) lo = mid + 1; else hi = mid; }
+  var cand = pts[lo];
+  if(lo > 0 && Math.abs(pts[lo - 1][0] - t) <= Math.abs(cand[0] - t)) cand = pts[lo - 1];
+  return cand;
+}
+function readoutHtml(cells){
+  return '<div class="readout-grid">' + cells.map(function(c){
+    return '<div class="readout-cell"><span class="rk">' + (c.color ? '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c.color + ';margin-right:4px"></span>' : "") + esc(c.k) + '</span><span class="rv num ' + (c.cls || "") + '">' + esc(c.v) + "</span></div>";
+  }).join("") + "</div>";
+}
+/* Fixed readout band height for a grid of `rows` rows: one row is a
+   15px label line + a 19px value line, rows are 4px apart, and the
+   band has 6px padding top and bottom. The height depends only on the
+   row count, never on whether values are currently shown, so hovering
+   or leaving a chart cannot move anything below the band. */
+function readoutHeightPx(rows){ return rows * 34 + (rows - 1) * 4 + 12; }
+function fmtSignedYen(v, digits){
+  if(!isNum(v)) return "—";
+  return (v > 0 ? "+" : (v < 0 ? "-" : "")) + fmtYen(Math.abs(v), digits == null ? 0 : digits);
+}
+function fmtQty(v){ return isNum(v) ? String(parseFloat(v.toFixed(8))) : "—"; }
+function kindLabel(kind){
+  if(kind === "terminal") return "終端手仕舞い";
+  return kind || "—";
+}
+
+/* ============ synced panels (pnl / price / position over one time axis) ============ */
+/* rows: [{t, <key>: value|null, ...}] sorted by t.
+   panelDefs: [{key, label, labelHtml?, color, height, fmtAxis(v),
+     lines?: [{key, color, width, dash?, step?, area?}],
+     bars?: bool, dots?: {key, colorFn(row)},
+     legend?: [{color, label, dash?}]}]
+   The readout is a fixed band above the panels: its height comes only
+   from opts.rows, and it always shows the same grid of cells — the
+   scrub values while the pointer is over a panel, blank values
+   otherwise — so hovering never moves the panels.
+   scrubCells(row) -> [{k, v, cls?, color?}]; blankCells is the same
+   grid with empty values. opts: {rows} */
+function mountPanels(wrap, readout, rows, panelDefs, view, scrubCells, blankCells, opts){
+  opts = opts || {};
+  var roRows = opts.rows || 1;
+  var W = 880, PL = 64, PR = 10, PT = 8, PB = 22;
+  wrap.innerHTML = panelDefs.map(function(pd){
+    var legend = "";
+    if(pd.legend){
+      legend = '<div class="chart-legend" style="margin:0 0 2px">' + pd.legend.map(function(l){
+        return '<span><span style="display:inline-block;width:16px;border-top:3px ' + (l.dash ? "dashed" : "solid") + " " + l.color + ';vertical-align:middle;margin-right:5px"></span>' + esc(l.label) + "</span>";
+      }).join("") + "</div>";
+    }
+    return '<p class="panel-label">' + (pd.labelHtml || esc(pd.label)) + "</p>" + legend + '<div class="chart-box" data-panel="' + pd.key + '"></div>';
+  }).join("");
+  var api = { view: view };
+  var scales = [];
+  function showBlank(){
+    readout.style.height = readoutHeightPx(roRows) + "px";
+    readout.innerHTML = readoutHtml(blankCells);
+  }
+  function draw(){
+    scales = [];
+    var vs = api.view.start, ve = api.view.end, span = ve - vs;
+    panelDefs.forEach(function(pd, pi){
+      var box = wrap.querySelector('[data-panel="' + pd.key + '"]');
+      if(!box) return;
+      var H = pd.height, ih = H - PT - PB, iw = W - PL - PR;
+      var lineSpecs = pd.lines || [{key: pd.key, color: pd.color, width: 1.7, step: pd.step}];
+      /* visible rows, plus one predecessor so lines start at the left edge */
+      var lo = 0; while(lo < rows.length && rows[lo].t < vs) lo++;
+      var visAll = [];
+      for(var i = Math.max(0, lo - 1); i < rows.length && rows[i].t <= ve; i++) visAll.push(rows[i]);
+      var drawn = strideRows(visAll, 2600);
+      var vMin = Infinity, vMax = -Infinity;
+      var valKeys = lineSpecs.map(function(ls){ return ls.key; });
+      if(pd.bars) valKeys.push(pd.key);
+      if(pd.dots) valKeys.push(pd.dots.key);
+      drawn.forEach(function(r){
+        valKeys.forEach(function(k){ if(isNum(r[k])){ if(r[k] < vMin) vMin = r[k]; if(r[k] > vMax) vMax = r[k]; } });
+      });
+      if(vMin === Infinity){ box.innerHTML = '<p class="muted small">この範囲にデータがありません。</p>'; scales.push(null); return; }
+      if(vMin === vMax){ vMin -= 1; vMax += 1; }
+      var pad = (vMax - vMin) * 0.08; vMin -= pad; vMax += pad;
+      function X(t){ return PL + (t - vs) / span * iw; }
+      function Y(v){ return PT + (vMax - v) / (vMax - vMin) * ih; }
+      scales.push({X: X, Y: Y, key: pd.key});
+      var parts = ['<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="' + esc(pd.label) + '">'];
+      for(var ti = 0; ti <= 3; ti++){
+        var tv = vMin + (vMax - vMin) * ti / 3, y = Y(tv);
+        parts.push('<line class="grid" x1="' + PL + '" y1="' + y + '" x2="' + (W - PR) + '" y2="' + y + '" stroke-width="1" stroke-dasharray="3 3"/>');
+        parts.push('<text x="' + (PL - 6) + '" y="' + (y + 5) + '" text-anchor="end" font-size="13">' + esc(pd.fmtAxis(tv)) + "</text>");
+      }
+      if(vMin < 0 && vMax > 0) parts.push('<line class="zero" x1="' + PL + '" y1="' + Y(0) + '" x2="' + (W - PR) + '" y2="' + Y(0) + '" stroke-width="1"/>');
+      if(pi === panelDefs.length - 1){
+        for(var xi = 0; xi <= 4; xi++){
+          var tt = vs + span * xi / 4;
+          parts.push('<text x="' + X(tt) + '" y="' + (H - 5) + '" text-anchor="middle" font-size="13">' + esc(fmtEpochJST(tt)) + "</text>");
+        }
+      }
+      function stepPath(seg, key){
+        var d = "";
+        seg.forEach(function(r, idx){
+          var x = X(r.t).toFixed(1), y = Y(r[key]).toFixed(1);
+          if(!idx) d = "M" + X(Math.max(vs, seg[0].t)).toFixed(1) + " " + y;
+          else d += "L" + x + " " + Y(seg[idx - 1][key]).toFixed(1) + "L" + x + " " + y;
+        });
+        d += "L" + X(ve).toFixed(1) + " " + Y(seg[seg.length - 1][key]).toFixed(1);
+        return d;
+      }
+      function linePath(seg, key){
+        return seg.map(function(r, idx){ return (idx ? "L" : "M") + X(r.t).toFixed(1) + " " + Y(r[key]).toFixed(1); }).join(" ");
+      }
+      /* position as bars: one bar per row, spanning to the next row */
+      if(pd.bars){
+        drawn.forEach(function(r, idx){
+          if(!isNum(r[pd.key])) return;
+          var x0 = X(Math.max(vs, r.t));
+          var nx = idx + 1 < drawn.length ? drawn[idx + 1].t : ve;
+          var x1 = X(Math.min(ve, nx));
+          var bw = Math.max(1, x1 - x0 - 0.5);
+          var y0 = Y(0), y1 = Y(r[pd.key]);
+          parts.push('<rect x="' + x0.toFixed(1) + '" y="' + Math.min(y0, y1).toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(1, Math.abs(y1 - y0)).toFixed(1) + '" style="fill:' + (r[pd.key] >= 0 ? "var(--gain)" : "var(--loss)") + '"/>');
+        });
+      }
+      /* lines, split into segments where the value is missing */
+      lineSpecs.forEach(function(ls){
+        if(pd.bars) return;
+        var segs = [], cur = [];
+        drawn.forEach(function(r){ if(isNum(r[ls.key])) cur.push(r); else if(cur.length){ segs.push(cur); cur = []; } });
+        if(cur.length) segs.push(cur);
+        segs.forEach(function(seg){
+          if(seg.length < 2 && !ls.step) return;
+          var d = ls.step ? stepPath(seg, ls.key) : linePath(seg, ls.key);
+          if(ls.area){
+            var y0 = Y(0).toFixed(1);
+            parts.push('<path d="' + d + "L" + X(ve).toFixed(1) + " " + y0 + "L" + X(Math.max(vs, seg[0].t)).toFixed(1) + " " + y0 + 'Z" fill="' + ls.color + '" fill-opacity="0.15" stroke="none"/>');
+          }
+          parts.push('<path d="' + d + '" fill="none" stroke="' + ls.color + '" stroke-width="' + (ls.width || 1.7) + '"' + (ls.dash ? ' stroke-dasharray="' + ls.dash + '"' : "") + "/>");
+        });
+      });
+      /* scatter dots (e.g. fill prices on the price panel) */
+      if(pd.dots){
+        drawn.forEach(function(r){
+          if(!isNum(r[pd.dots.key])) return;
+          parts.push('<circle class="sdot" cx="' + X(r.t).toFixed(1) + '" cy="' + Y(r[pd.dots.key]).toFixed(1) + '" r="3" style="fill:' + pd.dots.colorFn(r) + '"/>');
+        });
+      }
+      parts.push('<line class="xh" x1="0" y1="' + PT + '" x2="0" y2="' + (PT + ih) + '" stroke-width="1" stroke-dasharray="3 3" visibility="hidden"/>');
+      parts.push('<circle class="dot" r="3.5" fill="' + pd.color + '" visibility="hidden"/>');
+      parts.push("</svg>");
+      box.innerHTML = parts.join("");
+      var svg = box.querySelector("svg");
+      svg.addEventListener("pointermove", onScrub);
+      svg.addEventListener("pointerdown", onScrub);
+      svg.addEventListener("pointerleave", onLeave);
+    });
+    showBlank();
+  }
+  function onScrub(ev){
+    var svg = ev.currentTarget;
+    var rect = svg.getBoundingClientRect();
+    if(!(rect.width > 0)) return;
+    var x = (ev.clientX - rect.left) / rect.width * W;
+    var vs = api.view.start, ve = api.view.end;
+    var t = vs + (x - PL) / (W - PL - PR) * (ve - vs);
+    if(t < vs) t = vs; if(t > ve) t = ve;
+    var row = nearestRowByT(rows, t);
+    if(!row) return;
+    panelDefs.forEach(function(pd, pi){
+      var box = wrap.querySelector('[data-panel="' + pd.key + '"]');
+      if(!box) return;
+      var svg2 = box.querySelector("svg"); if(!svg2) return;
+      var xh = svg2.querySelector(".xh"), dot = svg2.querySelector(".dot"), sc = scales[pi];
+      if(!sc){ xh.setAttribute("visibility", "hidden"); dot.setAttribute("visibility", "hidden"); return; }
+      var cx = sc.X(t);
+      xh.setAttribute("x1", cx); xh.setAttribute("x2", cx); xh.setAttribute("visibility", "visible");
+      if(isNum(row[pd.key])){ dot.setAttribute("cx", sc.X(row.t)); dot.setAttribute("cy", sc.Y(row[pd.key])); dot.setAttribute("visibility", "visible"); }
+      else dot.setAttribute("visibility", "hidden");
+    });
+    readout.innerHTML = readoutHtml(scrubCells(row));
+  }
+  function onLeave(){
+    wrap.querySelectorAll(".xh").forEach(function(el){ el.setAttribute("visibility", "hidden"); });
+    wrap.querySelectorAll(".dot").forEach(function(el){ el.setAttribute("visibility", "hidden"); });
+    readout.innerHTML = readoutHtml(blankCells);
+  }
+  api.redraw = function(view){ api.view = view; draw(); };
+  draw();
+  return api;
+}
+
+/* ============ experiment overlay chart (cases + price on right axis) ============ */
+/* series: [{label, color, points:[[t,v],...]}]; pricePts: [[t,v],...]|null */
+function mountOverlayChart(box, readout, series, pricePts, view){
+  var W = 880, H = 260, PL = 64, PT = 10, PB = 24;
+  var api = { view: view };
+  var curBlank = [];
+  function draw(){
+    var PR = pricePts ? 72 : 10;
+    var vs = api.view.start, ve = api.view.end, span = ve - vs, iw = W - PL - PR, ih = H - PT - PB;
+    var vMin = Infinity, vMax = -Infinity, pMin = Infinity, pMax = -Infinity;
+    function scanPts(pts, isP){
+      pts.forEach(function(p){
+        if(p[0] < vs || p[0] > ve) return;
+        if(isP){ if(p[1] < pMin) pMin = p[1]; if(p[1] > pMax) pMax = p[1]; }
+        else { if(p[1] < vMin) vMin = p[1]; if(p[1] > vMax) vMax = p[1]; }
+      });
+    }
+    series.forEach(function(s){ scanPts(s.points, false); });
+    if(vMin === Infinity){ series.forEach(function(s){ s.points.forEach(function(p){ if(p[1] < vMin) vMin = p[1]; if(p[1] > vMax) vMax = p[1]; }); }); }
+    if(pricePts) scanPts(pricePts, true);
+    if(vMin === Infinity){ box.innerHTML = '<p class="muted">表示できるデータがありません。</p>'; return; }
+    if(vMin === vMax){ vMin -= 1; vMax += 1; }
+    var pad = (vMax - vMin) * 0.08; vMin -= pad; vMax += pad;
+    if(pMin !== Infinity){ if(pMin === pMax){ pMin -= 1; pMax += 1; } var pp = (pMax - pMin) * 0.08; pMin -= pp; pMax += pp; }
+    function X(t){ return PL + (t - vs) / span * iw; }
+    function Y(v){ return PT + (vMax - v) / (vMax - vMin) * ih; }
+    function YP(v){ return PT + (pMax - v) / (pMax - pMin) * ih; }
+    var parts = ['<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="損益カーブ（全ケース）">'];
+    for(var ti = 0; ti <= 4; ti++){
+      var tv = vMin + (vMax - vMin) * ti / 4, y = Y(tv);
+      parts.push('<line class="grid" x1="' + PL + '" y1="' + y + '" x2="' + (W - PR) + '" y2="' + y + '" stroke-width="1" stroke-dasharray="3 3"/>');
+      parts.push('<text x="' + (PL - 6) + '" y="' + (y + 5) + '" text-anchor="end" font-size="13">' + esc(fmtYen(tv, 0)) + "</text>");
+      if(pricePts && pMin !== Infinity){
+        var pv = pMin + (pMax - pMin) * ti / 4;
+        parts.push('<text x="' + (W - PR + 6) + '" y="' + (y + 5) + '" font-size="13">' + esc(fmtInt(pv)) + "</text>");
+      }
+    }
+    if(vMin < 0 && vMax > 0) parts.push('<line class="zero" x1="' + PL + '" y1="' + Y(0) + '" x2="' + (W - PR) + '" y2="' + Y(0) + '" stroke-width="1"/>');
+    for(var xi = 0; xi <= 4; xi++){
+      var tt = vs + span * xi / 4;
+      parts.push('<text x="' + X(tt) + '" y="' + (H - 6) + '" text-anchor="middle" font-size="13">' + esc(fmtEpochJST(tt)) + "</text>");
+    }
+    series.forEach(function(s){
+      var drawn = strideRows(s.points.filter(function(p){ return p[0] >= vs && p[0] <= ve; }), 2600);
+      if(drawn.length < 2) return;
+      var d = drawn.map(function(p, idx){ return (idx ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1); }).join(" ");
+      parts.push('<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.7"/>');
+    });
+    if(pricePts && pricePts.length > 1){
+      var pd2 = strideRows(pricePts.filter(function(p){ return p[0] >= vs && p[0] <= ve; }), 2600);
+      if(pd2.length > 1){
+        var d2 = pd2.map(function(p, idx){ return (idx ? "L" : "M") + X(p[0]).toFixed(1) + " " + YP(p[1]).toFixed(1); }).join(" ");
+        parts.push('<path d="' + d2 + '" fill="none" stroke="' + PRICE_COLOR + '" stroke-width="1.4" stroke-dasharray="5 3"/>');
+      }
+    }
+    parts.push('<line class="xh" x1="0" y1="' + PT + '" x2="0" y2="' + (PT + ih) + '" stroke-width="1" stroke-dasharray="3 3" visibility="hidden"/>');
+    series.forEach(function(s, si){ parts.push('<circle class="dot" data-s="' + si + '" r="3.5" fill="' + s.color + '" visibility="hidden"/>'); });
+    if(pricePts) parts.push('<circle class="pdot" r="3.5" fill="' + PRICE_COLOR + '" visibility="hidden"/>');
+    parts.push("</svg>");
+    box.innerHTML = parts.join("");
+    var svg = box.querySelector("svg");
+    var xh = svg.querySelector(".xh");
+    var dots = svg.querySelectorAll(".dot");
+    var pdot = svg.querySelector(".pdot");
+    /* fixed band: same grid of cells, values blank until scrubbed */
+    curBlank = [{k: "時刻 (JST)", v: ""}].concat(series.map(function(s){ return {k: s.label, v: "", color: s.color}; }));
+    if(pricePts) curBlank.push({k: "価格（右軸・円）", v: "", color: PRICE_COLOR});
+    readout.style.height = readoutHeightPx(Math.max(1, Math.ceil(curBlank.length / 4))) + "px";
+    readout.innerHTML = readoutHtml(curBlank);
+    function onMove(ev){
+      var rect = svg.getBoundingClientRect();
+      if(!(rect.width > 0)) return;
+      var x = (ev.clientX - rect.left) / rect.width * W;
+      var t = vs + (x - PL) / iw * span;
+      if(t < vs) t = vs; if(t > ve) t = ve;
+      var cells = [{k: "時刻 (JST)", v: fmtEpochJST(t)}];
+      series.forEach(function(s, si){
+        var p = nearestPointByT(s.points, t);
+        var dot = dots[si];
+        if(p && dot){ dot.setAttribute("cx", X(p[0])); dot.setAttribute("cy", Y(p[1])); dot.setAttribute("visibility", "visible"); }
+        cells.push({k: s.label, v: p ? fmtSignedYen(p[1], 0) + " 円" : "", cls: p ? pnlClass(p[1]) : "", color: s.color});
+      });
+      if(pricePts){
+        var pp2 = nearestPointByT(pricePts, t);
+        if(pp2 && pdot){ pdot.setAttribute("cx", X(pp2[0])); pdot.setAttribute("cy", YP(pp2[1])); pdot.setAttribute("visibility", "visible"); }
+        cells.push({k: "価格（右軸・円）", v: pp2 ? fmtInt(pp2[1]) + " 円" : "", color: PRICE_COLOR});
+      }
+      var cx = X(t);
+      xh.setAttribute("x1", cx); xh.setAttribute("x2", cx); xh.setAttribute("visibility", "visible");
+      readout.innerHTML = readoutHtml(cells);
+    }
+    function onLeave(){
+      xh.setAttribute("visibility", "hidden");
+      dots.forEach(function(d){ d.setAttribute("visibility", "hidden"); });
+      if(pdot) pdot.setAttribute("visibility", "hidden");
+      readout.innerHTML = readoutHtml(curBlank);
+    }
+    svg.addEventListener("pointermove", onMove);
+    svg.addEventListener("pointerdown", onMove);
+    svg.addEventListener("pointerleave", onLeave);
+  }
+  api.redraw = function(view){ api.view = view; draw(); };
+  api.setPrice = function(pts){ pricePts = pts; draw(); };
+  draw();
+  return api;
+}
+
+/* ============ per-fill points ============ */
+/* fills: raw rows from *_fills.jsonl.gz, in file (fill) order.
+   Each point: cumulative realized_pnl up to that fill, and the position after it. */
+function buildFillPoints(fills){
+  var cum = 0, pos = 0, cash = 0, pts = [];
+  fills.forEach(function(f){
+    var rp = num(f.realized_pnl, 0);
+    cum += rp;
+    var sign = f.side === "BUY" ? 1 : -1;
+    pos += sign * num(f.size, 0);
+    cash -= sign * num(f.size, 0) * num(f.price, 0);
+    pts.push({ t: num(f.t), cum: cum, realized: rp, cash: cash, pos: pos, side: f.side || "", kind: f.kind || "", size: num(f.size, NaN), price: num(f.price, NaN) });
+  });
+  return pts;
+}
+
+/* ============ overlay (all cases) display intervals ============ */
+/* The 1-hour overlay series comes from hourly_equity. Finer intervals
+   are re-sampled from each case's fills ledger: at every bucket time,
+   the position and cash balance after the fills up to that time are
+   marked at that second's market close — the same liquidation MTM the
+   case detail per-fill panel uses. Without market data the sampled
+   value is the cumulative realized PnL instead; a case with no ledger
+   keeps its 1-hour series. */
+var OVERLAY_INTERVALS = [ {label:"1分", sec:60}, {label:"5分", sec:300}, {label:"15分", sec:900}, {label:"1時間", sec:3600} ];
+function overlayBucketTimes(fullStart, fullEnd, intervalSec){
+  var times = [fullStart];
+  var t = (Math.floor(fullStart / intervalSec) + 1) * intervalSec;
+  for(; t < fullEnd; t += intervalSec) times.push(t);
+  if(times[times.length - 1] !== fullEnd) times.push(fullEnd);
+  return times;
+}
+async function buildOverlayInterval(exp, baseSeries, intervalSec, fullStart, fullEnd){
+  var times = overlayBucketTimes(fullStart, fullEnd, intervalSec);
+  var priceMap = await loadPrices(exp, times);
+  var canMtm = hasMarketData(exp);
+  var baseByLabel = {};
+  baseSeries.forEach(function(s){ baseByLabel[s.label] = s.points; });
+  var fallbackCases = [], series = [];
+  for(var ci = 0; ci < exp.cases.length; ci++){
+    var cs = exp.cases[ci];
+    var fills = await loadFills(exp, cs);
+    if(!fills || !fills.length){
+      var hp = baseByLabel[cs.label];
+      if(hp && hp.length > 1){ series.push({label: cs.label, color: chartColor(ci), points: hp}); fallbackCases.push(cs.label); }
+      continue;
+    }
+    var fpts = buildFillPoints(fills);
+    var fi = 0, pos = 0, cash = 0, cum = 0, lastFillPrice = null, lastPrice = null;
+    var pts = times.map(function(T){
+      while(fi < fpts.length && fpts[fi].t <= T){
+        pos = fpts[fi].pos; cash = fpts[fi].cash; cum = fpts[fi].cum;
+        if(isNum(fpts[fi].price)) lastFillPrice = fpts[fi].price;
+        fi++;
+      }
+      if(!canMtm) return [T, cum];
+      var mp = priceMap.get(Math.floor(T));
+      if(isNum(mp)) lastPrice = mp; else mp = lastPrice;
+      var v;
+      if(pos === 0) v = cash;
+      else if(isNum(mp)) v = cash + pos * mp;
+      else if(isNum(lastFillPrice)) v = cash + pos * lastFillPrice;
+      else v = cum;
+      return [T, v];
+    });
+    series.push({label: cs.label, color: chartColor(ci), points: pts});
+  }
+  var pricePts = [];
+  if(canMtm){
+    times.forEach(function(T){ var v = priceMap.get(Math.floor(T)); if(isNum(v)) pricePts.push([T, v]); });
+    pricePts.sort(function(a, b){ return a[0] - b[0]; });
+  }
+  return { series: series, pricePts: pricePts, realizedOnly: !canMtm, fallbackCases: fallbackCases };
+}
+
+/* ============ view: experiment list ============ */
+function renderList(query){
+  state.current = null; state.currentCase = null;
+  state.searchQuery = query || "";
+  var view = $("#view");
+  var q = (query || "").trim().toLowerCase();
+  var list = state.experiments.filter(function(e){
+    if(!q) return true;
+    return (e.name + " " + e.dir + " " + e.bot + " " + e.product).toLowerCase().indexOf(q) >= 0;
+  });
+  var maxMtime = 0;
+  state.experiments.forEach(function(e){ if(e.mtime > maxMtime) maxMtime = e.mtime; });
+  var h = "";
+  h += '<div class="toolbar"><input type="search" id="search" placeholder="実験名・パス・ボット名・商品で検索" value="' + esc(query || "") + '" aria-label="実験を検索">';
+  if(state.lastLoaded) h += '<span class="small muted">最終読み込み: ' + esc(fmtMtime(state.lastLoaded)) + " JST</span>";
+  h += "</div>";
+  if(!state.experiments.length){
+    h += '<div class="empty">フォルダを選ぶと、ここに実験の一覧が出ます。results.json と summary.csv の両方があるフォルダが1つの実験です。</div>';
+  } else if(!list.length){
+    h += '<div class="empty">検索に当たる実験がありません。</div>';
+  } else {
+    h += '<div class="exp-list">';
+    list.forEach(function(e){
+      var idx = state.experiments.indexOf(e);
+      h += '<button type="button" class="exp-card" data-exp="' + idx + '">';
+      h += '<span class="exp-head"><span class="exp-name">' + esc(e.name) + "</span>";
+      if(e.mtime && e.mtime === maxMtime) h += '<span class="badge">最新</span>';
+      h += "</span>";
+      h += '<span class="exp-path mono">' + esc(e.dir || "（選んだフォルダ直下）") + "</span>";
+      h += '<span class="exp-meta">';
+      h += '<span><span class="k">ボット</span><b>' + esc(e.bot || "—") + "</b></span>";
+      h += '<span><span class="k">商品</span><b>' + esc(e.product || "—") + "</b></span>";
+      h += '<span><span class="k">ケース</span><b>' + e.cases.length + "</b></span>";
+      if(e.best) h += '<span><span class="k">最良ケース</span><b>' + esc(e.best.label) + "</b> " + pnlHtml(num(e.best.raw.gross_pnl)) + " 円</span>";
+      h += '<span><span class="k">監査</span><b>' + (e.auditTotal ? e.auditPass + " / " + e.auditTotal + " 合格" : "—") + "</b></span>";
+      h += '<span><span class="k">モデル</span><b>' + esc(e.model || "—") + "</b>" + (isNum(e.latency) ? " ／ 注文遅延 " + esc(fmtLatency(e.latency)) : "") + (isNum(e.cancelLatency) ? " ／ 取り消し遅延 " + esc(fmtLatency(e.cancelLatency)) : "") + "</span>";
+      h += "</span>";
+      h += '<span class="exp-meta"><span><span class="k">期間</span>' + esc(fmtTsUTC(e.startUtc)) + " 〜 " + esc(fmtTsUTC(e.endUtc)) + '<br><span class="k"></span>' + esc(fmtTsJST(e.startUtc)) + " 〜 " + esc(fmtTsJST(e.endUtc)) + "</span>";
+      h += '<span><span class="k">results.json 更新</span>' + esc(fmtMtime(e.mtime)) + " JST</span></span>";
+      h += "</button>";
+    });
+    h += "</div>";
+  }
+  view.innerHTML = h;
+  var si = $("#search");
+  if(si){
+    si.addEventListener("input", function(){ renderList(si.value); var n = $("#search"); n.focus(); n.setSelectionRange(n.value.length, n.value.length); });
+  }
+  view.querySelectorAll("[data-exp]").forEach(function(b){
+    b.addEventListener("click", function(){ renderExperiment(state.experiments[Number(b.getAttribute("data-exp"))]); });
+  });
+  window.scrollTo(0, 0);
+}
+/* ============ lazy per-experiment files ============ */
+async function loadMatchRows(exp){
+  if(exp.matchRows !== null) return exp.matchRows;
+  exp.matchRows = [];
+  var e = exp.bag["match_summary.csv"];
+  if(e){ try { exp.matchRows = parseCSV(await e.getText()); } catch(_){ exp.matchRows = []; } }
+  return exp.matchRows;
+}
+/* fills ledger (*_fills.jsonl.gz) for the per-fill equity curve.
+   The name is resolved against the files actually present in the
+   experiment folder, not just by rewriting results.json's orders_file:
+   newer runs do not always keep that pairing (orders_file may carry a
+   path, or the ledger on disk may be named after the case with extra
+   segments such as pause_5s inserted), and the old code then reported
+   "not in the selected folder" for files that were right there. */
+function fillsFileName(cs){
+  var of = cs.raw.orders_file;
+  if(!of) return null;
+  var base = baseOf(String(of).replace(/\\/g, "/"));
+  if(base.indexOf("_orders.jsonl.gz") < 0) return null;
+  return base.replace("_orders.jsonl.gz", "_fills.jsonl.gz");
+}
+/* candidate ledger names for a case, best first. A group of names is
+   returned when a case's ledger is split over segment files: they are
+   read in name order and concatenated. */
+function fillsCandidates(exp, cs){
+  var primary = fillsFileName(cs);
+  var inDir = Object.keys(exp.bag || {}).filter(function(n){ return /_fills\.jsonl\.gz$/.test(n); });
+  function core(n){ return n.replace(/^segment_\d+_/, "").replace(/_fills\.jsonl\.gz$/, ""); }
+  var exact = inDir.filter(function(n){ return core(n) === cs.name; }).sort();
+  if(exact.length) return exact;
+  if(primary && inDir.indexOf(primary) >= 0) return [primary];
+  var containing = inDir.filter(function(n){ return !!cs.name && n.indexOf(cs.name) >= 0; }).sort();
+  if(containing.length) return containing;
+  return primary ? [primary] : [];
+}
+function fillsEntry(exp, name){
+  var e = exp.bag && exp.bag[name];
+  if(e && e.getBlob) return e;
+  if(state.files){
+    var rel = exp.dir ? exp.dir + "/" + name : name;
+    var f = state.files.get(rel);
+    if(f && f.getBlob) return f;
+  }
+  return null;
+}
+async function readGzipText(entry){
+  var blob = await entry.getBlob();
+  if(!window.DecompressionStream) throw new Error("DecompressionStream unsupported");
+  var stream = blob.stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).text();
+}
+async function loadFills(exp, cs){
+  if(cs._fills !== undefined) return cs._fills;
+  cs._fills = null;
+  var names = fillsCandidates(exp, cs), found = false;
+  for(var i = 0; i < names.length; i++){
+    var entry = fillsEntry(exp, names[i]);
+    if(!entry) continue;
+    found = true;
+    try {
+      var text = await readGzipText(entry);
+      var rows = [];
+      text.split("\n").forEach(function(line){
+        line = line.trim();
+        if(!line) return;
+        try { var o = JSON.parse(line); if(o && isNum(num(o.t, NaN))) rows.push(o); } catch(_){ }
+      });
+      cs._fills = (cs._fills || []).concat(rows);
+      cs._fillsName = names[i];
+    } catch(e){ cs._fillsError = true; }
+  }
+  if(!found) cs._fills = null;
+  else if(cs._fillsError && !cs._fills) cs._fills = null;
+  return cs._fills;
+}
+async function loadTextFile(exp, kind){
+  if(kind === "report"){
+    if(exp.reportText !== undefined) return exp.reportText;
+    exp.reportText = null;
+    var re = exp.bag["REPORT.md"];
+    if(re){ try { exp.reportText = await re.getText(); } catch(_){ } }
+    return exp.reportText;
+  }
+  if(exp.memoText !== undefined) return exp.memoText;
+  exp.memoText = null;
+  /* README.md: nearest ancestor of the experiment folder, from its parent upward */
+  var dir = dirOf(exp.dir);
+  while(true){
+    var p = dir ? dir + "/README.md" : "README.md";
+    var f = state.files && state.files.get(p);
+    if(f){ try { exp.memoText = await f.getText(); } catch(_){ } break; }
+    if(!dir) break;
+    dir = dirOf(dir);
+  }
+  return exp.memoText;
+}
+function mdSection(id, title, text){
+  if(text == null) return "";
+  var mode = state.mdMode[id] || "preview";
+  var h = '<div class="section"><h2>' + esc(title) + "</h2>";
+  h += '<div class="md-toggle" role="group" aria-label="' + esc(title) + 'の表示切り替え">';
+  h += '<button type="button" data-md="' + id + ':preview" class="' + (mode === "preview" ? "on" : "") + '">プレビュー</button>';
+  h += '<button type="button" data-md="' + id + ':raw" class="' + (mode === "raw" ? "on" : "") + '">原文</button></div>';
+  if(mode === "preview") h += '<div class="md-body">' + renderMarkdown(text) + "</div>";
+  else h += '<pre class="raw">' + esc(text) + "</pre>";
+  return h + "</div>";
+}
+
+/* ============ view: experiment detail ============ */
+var CASE_COLS = [
+  {key:"label", label:"ケース", type:"str"},
+  {key:"gross_pnl", label:"損益（円）"},
+  {key:"turnover", label:"売買代金（円）"},
+  {key:"pnl_per_million", label:"100万円あたり損益"},
+  {key:"max_drawdown_liquidation_mtm", label:"最大ドローダウン"},
+  {key:"max_abs_position", label:"最大建玉"},
+  {key:"terminal_position", label:"最終建玉"},
+  {key:"buy_orders", label:"買い注文"},
+  {key:"buy_filled_orders", label:"買い約定注文"},
+  {key:"buy_fill_rate", label:"買い約定率", fmt:"pct"},
+  {key:"sell_orders", label:"売り注文"},
+  {key:"sell_filled_orders", label:"売り約定注文"},
+  {key:"sell_fill_rate", label:"売り約定率", fmt:"pct"}
+];
+function sortedCases(exp){
+  var arr = exp.cases.slice();
+  var col = null;
+  CASE_COLS.forEach(function(c){ if(c.key === state.sortKey) col = c; });
+  arr.sort(function(a, b){
+    var va, vb;
+    if(state.sortKey === "label"){ va = a.label; vb = b.label; return state.sortDir * String(va).localeCompare(String(vb)); }
+    va = num(a.raw[state.sortKey], -Infinity); vb = num(b.raw[state.sortKey], -Infinity);
+    return state.sortDir * (va - vb);
+  });
+  return arr;
+}
+async function renderExperiment(exp){
+  state.current = exp; state.currentCase = null;
+  var view = $("#view");
+  var h = "";
+  h += '<button type="button" class="backlink" id="back-list">← 実験一覧へ戻る</button>';
+  h += '<div class="crumbs">' + esc(state.rootName) + (exp.dir ? " / " + esc(exp.dir) : "") + "</div>";
+  h += "<h1>" + esc(exp.name) + "</h1>";
+  h += '<div class="section"><div class="meta-grid">';
+  h += '<div><span class="k">ボット</span>' + esc(exp.bot || "—") + "</div>";
+  h += '<div><span class="k">商品</span>' + esc(exp.product || "—") + "</div>";
+  h += '<div><span class="k">モデル</span>' + esc(exp.model || "—") + "</div>";
+  h += '<div><span class="k">注文遅延（config.latency）</span>' + esc(fmtLatency(exp.latency)) + "</div>";
+  h += '<div><span class="k">取り消し遅延（config.cancel_latency）</span>' + esc(fmtLatency(exp.cancelLatency)) + "</div>";
+  h += '<div><span class="k">監査（flat の数）</span>' + (exp.auditTotal ? exp.auditPass + " / " + exp.auditTotal + " 合格" : "—") + "</div>";
+  h += '<div><span class="k">期間（UTC）</span>' + esc(fmtTsUTC(exp.startUtc)) + " 〜 " + esc(fmtTsUTC(exp.endUtc)) + "</div>";
+  h += '<div><span class="k">期間（JST）</span>' + esc(fmtTsJST(exp.startUtc)) + " 〜 " + esc(fmtTsJST(exp.endUtc)) + "</div>";
+  h += '<div><span class="k">results.json 更新</span>' + esc(fmtMtime(exp.mtime)) + " JST</div>";
+  h += '<div><span class="k">ケース数</span>' + exp.cases.length + "</div>";
+  h += "</div></div>";
+
+  /* case comparison table */
+  h += '<div class="section"><h2>ケース比較</h2><div class="table-wrap"><table class="case-table"><thead><tr>';
+  CASE_COLS.forEach(function(c){
+    var arrow = state.sortKey === c.key ? (state.sortDir === 1 ? " ▲" : " ▼") : "";
+    h += '<th class="sortable" data-sort="' + c.key + '">' + esc(c.label) + arrow + "</th>";
+  });
+  h += "</tr></thead><tbody>";
+  sortedCases(exp).forEach(function(cs){
+    var r = cs.raw;
+    h += '<tr class="clickable" data-case="' + esc(cs.name) + '">';
+    CASE_COLS.forEach(function(c, ci){
+      var v = c.key === "label" ? cs.label : r[c.key];
+      if(ci === 0) h += '<td class="case-name">' + esc(v) + "</td>";
+      else if(c.fmt === "pct") h += '<td class="num">' + fmtPct(num(v, NaN)) + "</td>";
+      else if(c.key === "gross_pnl" || c.key === "pnl_per_million") h += "<td>" + pnlHtml(num(v, NaN)) + "</td>";
+      else if(c.key === "max_abs_position" || c.key === "terminal_position") h += '<td class="num">' + fmtNum(num(v, NaN), 4) + "</td>";
+      else if(c.key === "turnover" || c.key === "max_drawdown_liquidation_mtm") h += '<td class="num">' + fmtYen(num(v, NaN), 0) + "</td>";
+      else h += '<td class="num">' + fmtInt(num(v, NaN)) + "</td>";
+    });
+    h += "</tr>";
+  });
+  h += "</tbody></table></div><p class=\"small muted\">行を選ぶとケース詳細を開きます。見出しを選ぶと並べ替えます。</p></div>";
+
+  /* overlay equity chart */
+  h += '<div class="section"><h2>損益カーブ（全ケース）</h2>';
+  h += '<div class="toggle-tabs"><span class="grp-label">表示間隔</span>' +
+    OVERLAY_INTERVALS.map(function(iv){ return '<button type="button" data-ov-interval="' + iv.sec + '">' + iv.label + "</button>"; }).join("") +
+    '<span class="small muted" data-ov-price-note></span></div>';
+  h += '<div class="readout" data-readout="overlay"></div><div class="chart-box" data-chart="overlay"></div>';
+  h += '<div data-range="overlay"></div>';
+  h += '<div class="chart-legend">' + exp.cases.map(function(cs, i){
+    return '<span><span class="dot" style="background:' + chartColor(i) + '"></span>' + esc(cs.label) + "</span>";
+  }).join("") + '<span><span class="dot" style="background:' + PRICE_COLOR + '"></span>価格（右軸）</span></div>';
+  h += '<p class="small muted" data-ov-note>results.json の hourly_equity（時間ごとの累積損益、円）です。価格は market_data の1秒データの終値です。</p></div>';
+
+  h += '<div id="md-slot"><p class="muted">判断メモとレポートを読み取り中です…</p></div>';
+  view.innerHTML = h;
+  window.scrollTo(0, 0);
+
+  $("#back-list").addEventListener("click", function(){ renderList(state.searchQuery || ""); });
+  view.querySelectorAll("[data-sort]").forEach(function(th){
+    th.addEventListener("click", function(){
+      var k = th.getAttribute("data-sort");
+      if(state.sortKey === k) state.sortDir = -state.sortDir;
+      else { state.sortKey = k; state.sortDir = k === "label" ? 1 : -1; }
+      renderExperiment(exp);
+    });
+  });
+  view.querySelectorAll("[data-case]").forEach(function(tr){
+    tr.addEventListener("click", function(){
+      var nm = tr.getAttribute("data-case");
+      for(var i = 0; i < exp.cases.length; i++) if(exp.cases[i].name === nm){ renderCase(exp, exp.cases[i]); break; }
+    });
+  });
+  var series = exp.cases.map(function(cs, i){
+    var pts = (cs.raw.hourly_equity || []).filter(function(p){ return Array.isArray(p) && isNum(p[0]) && isNum(p[1]); });
+    return { label: cs.label, color: chartColor(i), points: pts };
+  }).filter(function(s){ return s.points.length > 1; });
+  var oprefs = state.overlayPrefs[exp.dir] || (state.overlayPrefs[exp.dir] = {zoom: null});
+  if(oprefs.interval == null) oprefs.interval = 60;
+  var ovBox = $('[data-chart="overlay"]'), ovRo = $('[data-readout="overlay"]'), ovRange = $('[data-range="overlay"]');
+  var priceNote = view.querySelector("[data-ov-price-note]");
+  var ovNote = view.querySelector("[data-ov-note]");
+  var intervalBtns = view.querySelectorAll("[data-ov-interval]");
+  if(!series.length){
+    ovBox.innerHTML = '<p class="muted">hourly_equity がないため、カーブは表示できません。</p>';
+    intervalBtns.forEach(function(b){ b.disabled = true; });
+  } else {
+    (async function(){
+      var fullStart = Infinity, fullEnd = -Infinity, secs = [];
+      series.forEach(function(s){ s.points.forEach(function(p){ if(p[0] < fullStart) fullStart = p[0]; if(p[0] > fullEnd) fullEnd = p[0]; secs.push(p[0]); }); });
+      var priceMap = await loadPrices(exp, secs);
+      if(state.current !== exp) return;
+      var canPrice = hasMarketData(exp);
+      var hourlyPricePts = [];
+      if(canPrice){ secs.forEach(function(sec){ var v = priceMap.get(Math.floor(sec)); if(isNum(v)) hourlyPricePts.push([sec, v]); }); }
+      hourlyPricePts.sort(function(a, b){ return a[0] - b[0]; });
+      if(!canPrice && priceNote) priceNote.textContent = "価格は market_data を含むフォルダ（bitcoin 全体やリポジトリのフォルダ）を選んだときだけ表示できます。";
+      var chart = null, curPricePts = hourlyPricePts, buildToken = 0;
+      function noteFor(intervalSec, built){
+        if(!ovNote) return;
+        var txt;
+        if(intervalSec >= 3600){
+          txt = "results.json の hourly_equity（時間ごとの累積損益、円）です。価格は market_data の1秒データの終値です。";
+        } else if(built && built.realizedOnly){
+          txt = "market_data が無いため、約定台帳（*_fills.jsonl.gz）の累計実現損益を " + (intervalSec / 60) + "分ごとに取り直して表示しています（時価ではありません）。価格の線は出ません。";
+        } else {
+          txt = "約定台帳（*_fills.jsonl.gz）と market_data の価格から、" + (intervalSec / 60) + "分ごとに取り直した時価（清算MTM）の累積損益です。ケース詳細の約定単位の時価系列と同じ計算です。";
+        }
+        if(built && built.fallbackCases && built.fallbackCases.length){
+          txt += "約定台帳が無いケース（" + built.fallbackCases.join("、") + "）は1時間の系列のままです。";
+        }
+        ovNote.textContent = txt;
+      }
+      async function applyInterval(intervalSec){
+        var token = ++buildToken;
+        intervalBtns.forEach(function(b){
+          b.classList.toggle("on", Number(b.getAttribute("data-ov-interval")) === intervalSec);
+          b.disabled = true;
+        });
+        var curSeries = series, built = null;
+        if(intervalSec < 3600){
+          ovBox.innerHTML = '<p class="muted">約定台帳から ' + (intervalSec / 60) + "分ごとの系列を取り直しています…</p>";
+          built = await buildOverlayInterval(exp, series, intervalSec, fullStart, fullEnd);
+          if(token !== buildToken || state.current !== exp) return;
+          curSeries = built.series.length ? built.series : series;
+          curPricePts = built.pricePts;
+        } else {
+          curPricePts = hourlyPricePts;
+        }
+        var zoom = oprefs.zoom;
+        if(zoom && (zoom.start < fullStart || zoom.end > fullEnd)) zoom = null;
+        var view0 = zoom || {start: fullStart, end: fullEnd};
+        chart = mountOverlayChart(ovBox, ovRo, curSeries, canPrice ? curPricePts : null, view0);
+        var raf = 0;
+        mountRangeControl(ovRange, {
+          fullStart: fullStart, fullEnd: fullEnd,
+          overview: curSeries.map(function(s){ return {points: s.points, color: s.color}; }),
+          zoom: zoom,
+          onChange: function(z){
+            oprefs.zoom = z;
+            if(raf) return;
+            raf = requestAnimationFrame(function(){ raf = 0; if(state.current === exp && chart) chart.redraw(z || {start: fullStart, end: fullEnd}); });
+          }
+        });
+        noteFor(intervalSec, built);
+        intervalBtns.forEach(function(b){ b.disabled = false; });
+      }
+      intervalBtns.forEach(function(b){
+        b.addEventListener("click", function(){
+          var sec = Number(b.getAttribute("data-ov-interval"));
+          if(oprefs.interval === sec && chart) return;
+          oprefs.interval = sec;
+          applyInterval(sec);
+        });
+      });
+      applyInterval(oprefs.interval);
+    })();
+  }
+
+  var memo = await loadTextFile(exp, "memo");
+  var report = await loadTextFile(exp, "report");
+  if(state.current !== exp) return;
+  var slot = $("#md-slot");
+  var mh = "";
+  mh += mdSection("memo", "判断メモ（README.md）", memo);
+  mh += mdSection("report", "レポート（REPORT.md）", report);
+  if(!mh) mh = '<div class="section"><h2>判断メモ・レポート</h2><p class="muted">README.md も REPORT.md も見つかりませんでした。</p></div>';
+  slot.innerHTML = mh;
+  slot.querySelectorAll("[data-md]").forEach(function(b){
+    b.addEventListener("click", function(){
+      var parts = b.getAttribute("data-md").split(":");
+      state.mdMode[parts[0]] = parts[1];
+      renderExperiment(exp);
+    });
+  });
+}
+/* ============ view: case detail ============ */
+var GROUP_LABELS = {
+  position_direction: "ポジション方向",
+  entry_kind: "入り方（maker / taker）",
+  exit_kind: "出方（maker / taker / 終端）",
+  direction_entry_exit_kind: "方向×入り×出",
+  holding_duration: "保有時間",
+  entry_hour_jst: "入った時刻（JST）",
+  exit_hour_jst: "出た時刻（JST）"
+};
+var GROUP_ORDER = ["position_direction","entry_kind","exit_kind","direction_entry_exit_kind","holding_duration","entry_hour_jst","exit_hour_jst"];
+function holdingRank(key){
+  var known = {"<1m":0, "1-5m":1, "5-15m":2, "15-60m":3, ">=60m":4};
+  if(key in known) return known[key];
+  var m = String(key).match(/(\d+(?:\.\d+)?)/);
+  return m ? 100 + parseFloat(m[1]) : 999;
+}
+function markoutCells(mo){
+  /* mo: {horizon: {yen_per_btc, count}} -> rows for 1/5/30/60 */
+  return ["1","5","30","60"].map(function(hz){
+    var v = mo ? mo[hz] : null;
+    return { hz: hz, yen: v ? num(v.yen_per_btc, NaN) : NaN, count: v ? num(v.count, NaN) : NaN };
+  });
+}
+async function renderCase(exp, cs){
+  state.currentCase = cs;
+  var r = cs.raw;
+  var view = $("#view");
+  var h = "";
+  h += '<button type="button" class="backlink" id="back-exp">← 実験詳細へ戻る</button>';
+  h += '<div class="crumbs">' + esc(exp.name) + "</div>";
+  h += "<h1>" + esc(cs.label) + "</h1>";
+  if(cs.name !== cs.label) h += '<p class="muted mono small">' + esc(cs.name) + "</p>";
+
+  /* headline metrics */
+  var fee = r.fee_sensitivity || {};
+  var cfg = r.config || {};
+  var metrics = [
+    {k:"損益 gross_pnl（円）", v: pnlHtml(num(r.gross_pnl, NaN))},
+    {k:"注文遅延（config.latency）", v: '<span class="num">' + esc(fmtLatency(cfg.latency)) + "</span>"},
+    {k:"取り消し遅延（config.cancel_latency）", v: '<span class="num">' + esc(fmtLatency(cfg.cancel_latency)) + "</span>"},
+    {k:"売買代金 turnover（円）", v: '<span class="num">' + fmtYen(num(r.turnover, NaN), 0) + "</span>"},
+    {k:"100万円あたり損益", v: pnlHtml(num(r.pnl_per_million, NaN))},
+    {k:"最大ドローダウン（円）", v: '<span class="num">' + fmtYen(num(r.max_drawdown_liquidation_mtm, NaN), 0) + "</span>"},
+    {k:"最大建玉", v: '<span class="num">' + fmtNum(num(r.max_abs_position, NaN), 4) + "</span>"},
+    {k:"最終建玉", v: '<span class="num">' + fmtNum(num(r.terminal_position, NaN), 4) + "</span>"},
+    {k:"保有割合 holding_fraction", v: '<span class="num">' + (isNum(r.holding_fraction) ? (r.holding_fraction*100).toFixed(1) + "%" : "—") + "</span>"},
+    {k:"手数料 fees（円）", v: '<span class="num">' + fmtYen(num(r.fees, NaN)) + "</span>"},
+    {k:"損益分岐 break_even（片道 bp）", v: '<span class="num">' + fmtNum(num(r.break_even_one_way_bp, NaN), 3) + "</span>"},
+    {k:"手数料 0.1bp のときの損益", v: pnlHtml(num(fee["0.1"], NaN))},
+    {k:"手数料 0.5bp のときの損益", v: pnlHtml(num(fee["0.5"], NaN))},
+    {k:"手数料 1bp のときの損益", v: pnlHtml(num(fee["1"], NaN))},
+    {k:"監査 flat", v: cs.audit ? (cs.audit.flat === true ? "合格（flat）" : "未達") : "—"},
+    {k:"約定イベント数", v: '<span class="num">' + fmtInt(num(r.counts && r.counts.fill_events, NaN)) + "</span>"},
+    {k:"maker 約定 / taker 約定", v: '<span class="num">' + fmtInt(num(r.counts && r.counts.maker_fills, NaN)) + " / " + fmtInt(num(r.counts && r.counts.taker_fills, NaN)) + "</span>"}
+  ];
+  h += '<div class="section"><h2>主要指標</h2><div class="metric-grid">';
+  metrics.forEach(function(m){ h += '<div class="metric"><span class="k">' + esc(m.k) + '</span><span class="v">' + m.v + "</span></div>"; });
+  h += "</div></div>";
+
+  /* equity curve */
+  h += '<div class="section"><h2>損益カーブ</h2>';
+  h += '<div data-curve-msg></div>';
+  h += '<div class="readout" data-readout="case"></div>';
+  h += '<div data-panels></div>';
+  h += '<div data-range="case"></div>';
+  h += '<p class="small muted" data-curve-note></p></div>';
+
+  /* markouts */
+  h += '<div class="section"><h2>マークアウト（円/BTC）</h2>';
+  h += '<div data-markout-charts></div>';
+  h += '<div class="table-wrap"><table><thead><tr><th>約定後の経過</th><th>全体</th><th>件数</th></tr></thead><tbody>';
+  markoutCells(r.fill_markouts).forEach(function(c){
+    h += "<tr><td>" + c.hz + '秒後</td><td>' + pnlHtml(c.yen, 0) + '</td><td class="num">' + fmtInt(c.count) + "</td></tr>";
+  });
+  h += "</tbody></table></div>";
+  var sk = r.fill_markouts_by_side_kind || {};
+  var skKeys = ["BUY/maker","BUY/taker","SELL/maker","SELL/taker"].filter(function(k){ return sk[k]; });
+  Object.keys(sk).forEach(function(k){ if(skKeys.indexOf(k) < 0) skKeys.push(k); });
+  if(skKeys.length){
+    h += '<h3 style="margin-top:16px">売買×maker/taker 別（円/BTC）</h3><div class="table-wrap"><table><thead><tr><th>区分</th><th>1秒後</th><th>5秒後</th><th>30秒後</th><th>60秒後</th><th>件数（1秒後）</th></tr></thead><tbody>';
+    skKeys.forEach(function(k){
+      var cells = markoutCells(sk[k]);
+      h += "<tr><td>" + esc(k) + "</td>" + cells.map(function(c){ return "<td>" + pnlHtml(c.yen, 0) + "</td>"; }).join("") + '<td class="num">' + fmtInt(cells[0].count) + "</td></tr>";
+    });
+    h += "</tbody></table></div>";
+  }
+  h += '<p class="small muted">マークアウトは約定後に価格がどれだけ動いたかです。マイナスは約定後に不利へ動いたことを表します。</p></div>';
+
+  /* order summary */
+  var os = r.order_summary || {};
+  if(os.BUY || os.SELL){
+    h += '<div class="section"><h2>注文の集計</h2><div class="table-wrap"><table><thead><tr><th>側</th><th>注文件数</th><th>約定した注文</th><th>未約定の取り消し</th><th>取消依頼 p50/p90/p99（秒）</th><th>取り消し完了まで p50/p90/p99（秒）</th><th>初回約定 p50/p90/p99（秒）</th></tr></thead><tbody>';
+    ["BUY","SELL"].forEach(function(side){
+      var o = os[side]; if(!o) return;
+      function pct3(x){ return x ? [x.p50, x.p90, x.p99].map(function(v){ return isNum(v) ? v.toFixed(2) : "—"; }).join(" / ") : "—"; }
+      h += "<tr><td>" + (side === "BUY" ? "買い" : "売り") + '</td><td class="num">' + fmtInt(num(o.orders, NaN)) + '</td><td class="num">' + fmtInt(num(o.filled_orders, NaN)) + '</td><td class="num">' + fmtInt(num(o.unfilled_cancelled, NaN)) + '</td><td class="num">' + pct3(o.cancel_request_seconds) + '</td><td class="num">' + pct3(o.cancel_complete_seconds) + '</td><td class="num">' + pct3(o.first_fill_seconds) + "</td></tr>";
+    });
+    h += "</tbody></table></div></div>";
+  }
+
+  /* breakdowns */
+  h += '<div class="section"><h2>内訳（マッチ単位の実現損益）</h2><div id="breakdown-slot"><p class="muted">match_summary.csv を読み取り中です…</p></div></div>';
+
+  /* config */
+  h += '<div class="section"><h2>実行条件</h2>';
+  h += '<p>注文遅延（config.latency）：<b class="num">' + esc(fmtLatency(cfg.latency)) + '</b> ／ 取り消し遅延（config.cancel_latency）：<b class="num">' + esc(fmtLatency(cfg.cancel_latency)) + "</b></p>";
+  h += '<h3>config</h3><pre class="raw">' + esc(JSON.stringify(r.config || {}, null, 2)) + "</pre>";
+  var ov = (r.bot_metadata && r.bot_metadata.overrides) || null;
+  if(ov) h += '<h3 style="margin-top:14px">bot_metadata.overrides</h3><pre class="raw">' + esc(JSON.stringify(ov, null, 2)) + "</pre>";
+  if(r.bot_metadata && Object.keys(r.bot_metadata).length > (ov ? 1 : 0))
+    h += '<h3 style="margin-top:14px">bot_metadata（全体）</h3><pre class="raw">' + esc(JSON.stringify(r.bot_metadata, null, 2)) + "</pre>";
+  h += "</div>";
+
+  view.innerHTML = h;
+  window.scrollTo(0, 0);
+  $("#back-exp").addEventListener("click", function(){ renderExperiment(exp); });
+  var prefs = state.chartPrefs[exp.dir + "\n" + cs.name] ||
+    (state.chartPrefs[exp.dir + "\n" + cs.name] = {zoom: null});
+  async function drawCaseCurve(){
+    var wrap = $('[data-panels]'), ro = $('[data-readout="case"]'), note = $('[data-curve-note]'),
+        msg = $('[data-curve-msg]'), rangeEl = $('[data-range="case"]');
+    if(!wrap || !ro) return;
+    ro.style.height = readoutHeightPx(3) + "px";
+    ro.innerHTML = '<div class="readout-hint">読み取り中です。</div>';
+    wrap.innerHTML = '<p class="muted">読み取り中です…</p>';
+    if(rangeEl) rangeEl.innerHTML = "";
+    if(note) note.textContent = "";
+    if(msg) msg.innerHTML = "";
+
+    var fills = await loadFills(exp, cs);
+    var fpts = fills && fills.length ? buildFillPoints(fills) : null;
+    /* the plot is always per-fill; the hourly series is only a
+       fallback for cases whose fills ledger cannot be used */
+    var isFills = !!fpts;
+    var canPrice = hasMarketData(exp);
+    /* the price panel is always shown (in per-fill mode it carries
+       the fill-price dots even without market data); without market
+       data the market line cannot be drawn, so say so here */
+    if(msg && !canPrice){
+      msg.innerHTML = '<p class="small muted">価格（市場価格の線）は market_data を含むフォルダ（bitcoin 全体やリポジトリのフォルダ）を選んだときだけ表示できます。' + (isFills ? "約定価格の点は表示されます。" : "") + "</p>";
+    }
+    var hourlyPts = (r.hourly_equity || []).filter(function(p){ return Array.isArray(p) && isNum(p[0]) && isNum(p[1]); });
+    var secs = hourlyPts.map(function(p){ return p[0]; });
+    if(fpts) fpts.forEach(function(p){ secs.push(Math.floor(p.t)); });
+    var priceMap = await loadPrices(exp, secs);
+    if(state.currentCase !== cs) return;
+    function priceAt(t){ var v = priceMap.get(Math.floor(t)); return isNum(v) ? v : null; }
+
+    var rows;
+    if(isFills){
+      rows = fpts.map(function(p){
+        var mp = priceAt(p.t);
+        /* liquidation MTM right after the fill: cash balance plus the
+           open position marked at that second's market close (the
+           fill's own price when the second has no market row); when
+           flat it is exactly the cumulative realized PnL */
+        var mtm = p.pos === 0 ? p.cash : p.cash + p.pos * (isNum(mp) ? mp : p.price);
+        return { t: p.t, pnl: p.cum, mtm: mtm, pos: p.pos, price: mp, fillPrice: p.price, side: p.side, kind: p.kind, size: p.size, realized: p.realized };
+      });
+    } else {
+      if(hourlyPts.length < 2){
+        ro.style.height = readoutHeightPx(1) + "px";
+        wrap.innerHTML = '<p class="muted">' + (cs._fillsError
+          ? "約定台帳を読めませんでした（解凍に対応していないブラウザの可能性があります）。Chrome か Edge で開いてください。hourly_equity もないため、代替表示もできません。"
+          : "約定台帳（*_fills.jsonl.gz）が選んだフォルダになく、hourly_equity もないため、カーブは表示できません。") + "</p>";
+        ro.innerHTML = '<div class="readout-hint">カーブは表示できません。</div>';
+        return;
+      }
+      rows = hourlyPts.map(function(p){ return { t: p[0], pnl: p[1], price: priceAt(p[0]), pos: null }; });
+      if(fpts){
+        var fi = 0, pos = 0;
+        rows.forEach(function(row){
+          while(fi < fpts.length && fpts[fi].t <= row.t){ pos = fpts[fi].pos; fi++; }
+          row.pos = pos;
+        });
+      }
+    }
+
+    var maxLong = 0, maxShort = 0, hasPos = false;
+    rows.forEach(function(row){
+      if(isNum(row.pos)){ hasPos = true; if(row.pos > maxLong) maxLong = row.pos; if(row.pos < maxShort) maxShort = row.pos; }
+    });
+    var posStats = hasPos ? "　最大ロング " + maxLong.toFixed(3) + " / 最大ショート " + maxShort.toFixed(3) : "";
+
+    var defs, blankCells, scrubCells;
+    if(isFills){
+      defs = [{
+        key: "mtm",
+        label: "損益（円、約定ごと）― 時価（清算MTM）と累計実現",
+        color: chartColor(0), height: 176,
+        lines: [
+          {key: "mtm", color: chartColor(0), width: 2},
+          {key: "pnl", color: DIM_COLOR, width: 1.5, dash: "5 3", step: true}
+        ],
+        legend: [
+          {color: chartColor(0), label: "時価損益"},
+          {color: DIM_COLOR, label: "累計実現", dash: true}
+        ],
+        fmtAxis: function(v){ return fmtYen(v, 0); }
+      }];
+      defs.push({
+        key: "price",
+        label: "価格（" + (exp.product || "商品") + "、円）",
+        labelHtml: "価格（" + esc(exp.product || "商品") + '、円）― <span style="color:var(--gain)">●</span> 買い約定 <span style="color:var(--loss)">●</span> 売り約定 / ― 市場価格（終値）',
+        color: DIM_COLOR, height: 112,
+        lines: [{key: "price", color: DIM_COLOR, width: 1.2}],
+        dots: { key: "fillPrice", colorFn: function(row){ return row.side === "BUY" ? "var(--gain)" : "var(--loss)"; } },
+        fmtAxis: function(v){ return fmtInt(v); }
+      });
+      defs.push({
+        key: "pos",
+        label: "ポジション（BTC、約定後の数量）" + posStats,
+        color: chartColor(0), height: 112,
+        lines: [{key: "pos", color: chartColor(0), width: 1.8, step: true, area: true}],
+        fmtAxis: function(v){ return fmtNum(v, 3); }
+      });
+      blankCells = [
+        {k: "時刻 (JST)", v: ""}, {k: "売買", v: ""}, {k: "数量", v: ""}, {k: "約定価格", v: ""}, {k: "種別", v: ""},
+        {k: "この約定", v: ""}, {k: "累計実現", v: ""}, {k: "時価損益", v: ""}, {k: "ポジション", v: ""}, {k: "市場価格", v: ""}
+      ];
+      scrubCells = function(row){
+        return [
+          {k: "時刻 (JST)", v: fmtEpochJSTS(row.t)},
+          {k: "売買", v: row.side === "BUY" ? "買い" : (row.side === "SELL" ? "売り" : (row.side || "—")), cls: row.side === "BUY" ? "gain" : (row.side === "SELL" ? "loss" : "")},
+          {k: "数量", v: isNum(row.size) ? fmtQty(row.size) + " BTC" : ""},
+          {k: "約定価格", v: isNum(row.fillPrice) ? fmtInt(row.fillPrice) + " 円" : ""},
+          {k: "種別", v: kindLabel(row.kind)},
+          {k: "この約定", v: fmtSignedYen(row.realized, 0) + " 円", cls: pnlClass(row.realized)},
+          {k: "累計実現", v: fmtSignedYen(row.pnl, 0) + " 円", cls: pnlClass(row.pnl)},
+          {k: "時価損益", v: fmtSignedYen(row.mtm, 0) + " 円", cls: pnlClass(row.mtm)},
+          {k: "ポジション", v: (row.pos >= 0 ? "+" : "") + row.pos.toFixed(4) + " BTC"},
+          {k: "市場価格", v: isNum(row.price) ? fmtInt(row.price) + " 円" : ""}
+        ];
+      };
+    } else {
+      defs = [{
+        key: "pnl", label: "累積損益（円）",
+        color: chartColor(0), height: 176,
+        lines: [{key: "pnl", color: chartColor(0), width: 2}],
+        fmtAxis: function(v){ return fmtYen(v, 0); }
+      }];
+      if(canPrice){
+        var fp = null, lp = null;
+        rows.forEach(function(row){ if(isNum(row.price)){ if(fp === null) fp = row.price; lp = row.price; } });
+        var chg = "";
+        if(fp && lp){ var pct = (lp - fp) / fp * 100; chg = "　" + fmtInt(fp) + " → " + fmtInt(lp) + " 円（" + (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%）"; }
+        defs.push({
+          key: "price", label: "価格（" + (exp.product || "商品") + "・終値、円）" + chg,
+          color: PRICE_COLOR, height: 112,
+          lines: [{key: "price", color: PRICE_COLOR, width: 1.8}],
+          fmtAxis: function(v){ return fmtInt(v); }
+        });
+      }
+      if(hasPos) defs.push({
+        key: "pos", label: "ポジション（BTC、+ロング / −ショート）" + posStats,
+        color: chartColor(0), height: 112, bars: true,
+        fmtAxis: function(v){ return fmtNum(v, 3); }
+      });
+      blankCells = [
+        {k: "時刻 (JST)", v: ""}, {k: "損益（時価）", v: ""}, {k: "価格", v: ""}, {k: "ポジション", v: ""}
+      ];
+      scrubCells = function(row){
+        return [
+          {k: "時刻 (JST)", v: fmtEpochJST(row.t)},
+          {k: "損益（時価）", v: fmtSignedYen(row.pnl, 0) + " 円", cls: pnlClass(row.pnl)},
+          {k: "価格", v: isNum(row.price) ? fmtInt(row.price) + " 円" : ""},
+          {k: "ポジション", v: isNum(row.pos) ? (row.pos >= 0 ? "+" : "") + row.pos.toFixed(4) + " BTC" : ""}
+        ];
+      };
+    }
+
+    var fullStart = rows[0].t, fullEnd = rows[rows.length - 1].t;
+    var zoom = prefs.zoom;
+    if(zoom && (zoom.start < fullStart || zoom.end > fullEnd || zoom.end - zoom.start < 30)) zoom = null;
+    var view0 = zoom || {start: fullStart, end: fullEnd};
+    var panels = mountPanels(wrap, ro, rows, defs, view0, scrubCells, blankCells, {rows: isFills ? 3 : 1});
+    var raf = 0;
+    mountRangeControl(rangeEl, {
+      fullStart: fullStart, fullEnd: fullEnd,
+      overview: [{points: rows.map(function(row){ return [row.t, isFills ? row.mtm : row.pnl]; }), color: chartColor(0)}],
+      zoom: zoom,
+      onChange: function(z){
+        prefs.zoom = z;
+        if(raf) return;
+        raf = requestAnimationFrame(function(){ raf = 0; if(state.currentCase === cs) panels.redraw(z || {start: fullStart, end: fullEnd}); });
+      }
+    });
+    if(note){
+      if(isFills){
+        var finalCum = fpts[fpts.length - 1].cum;
+        var match = isNum(r.gross_pnl) && Math.abs(finalCum - r.gross_pnl) < 0.01;
+        note.textContent = "約定台帳（" + (cs._fillsName || fillsFileName(cs) || "*_fills.jsonl.gz") + "）の約定ごとの損益です。時価損益は現金残高に建玉×市場価格（終値、その秒に無い場合は約定価格）を加えた清算MTM、累計実現は realized_pnl を約定順に積み上げたものです。約定 " + fills.length.toLocaleString("ja-JP") + " 件、累計実現の最後の点は " + fmtYen(finalCum) + " 円" + (isNum(r.gross_pnl) ? "（gross_pnl " + fmtYen(r.gross_pnl) + " 円と" + (match ? "一致します" : "一致しません") + "）" : "") + "。価格パネルの点は約定価格です。";
+      } else {
+        note.textContent = (cs._fillsError
+          ? "約定台帳（*_fills.jsonl.gz）を読めなかったため、時間ごとで代替表示しています。"
+          : "このケースの約定台帳（*_fills.jsonl.gz）が選んだフォルダにないため、時間ごとで代替表示しています。") +
+          "results.json の hourly_equity（時間ごとの累積損益＝時価、円）です。価格は各時間の点の市場価格（終値）です。";
+      }
+    }
+  }
+
+  drawCaseCurve();
+  mountMarkoutChart(exp, cs);
+
+  var rows = await loadMatchRows(exp);
+  if(state.currentCase !== cs) return;
+  renderBreakdown(exp, cs, rows);
+}
+/* ============ markout bar charts (one small chart per series) ============ */
+/* Series are split into separate small charts (overall on top, then
+   BUY/maker, BUY/taker, SELL/maker, SELL/taker in a grid). Each chart
+   scales its y axis to its own values (zero always included, a little
+   padding on both sides), so a series with small values is not
+   flattened by another series' outliers. Each chart has its own
+   fixed readout band above it: the same three cells at all times,
+   values filled while the pointer is on a bar and blank otherwise,
+   so hovering never moves anything. */
+function mountMarkoutChart(exp, cs){
+  var r = cs.raw;
+  var wrap = $('[data-markout-charts]');
+  if(!wrap) return;
+  var sk = r.fill_markouts_by_side_kind || {};
+  var skKeys = ["BUY/maker","BUY/taker","SELL/maker","SELL/taker"].filter(function(k){ return sk[k]; });
+  Object.keys(sk).forEach(function(k){ if(skKeys.indexOf(k) < 0) skKeys.push(k); });
+  var HZ = ["1", "5", "30", "60"];
+  var blocks = [{label: "全体", data: r.fill_markouts || {}, big: true}];
+  skKeys.forEach(function(k){ blocks.push({label: k, data: sk[k], big: false}); });
+  var anyVal = false;
+  blocks.forEach(function(b){ HZ.forEach(function(hz){ var c = b.data[hz]; if(c && isNum(num(c.yen_per_btc, NaN))) anyVal = true; }); });
+  if(!anyVal){ wrap.innerHTML = '<p class="muted">マークアウトのデータがありません。</p>'; return; }
+  function blockHtml(b, bi){
+    return '<div class="markout-block"><p class="panel-label">' + esc(b.label) + '</p>' +
+      '<div class="readout" data-mo-readout="' + bi + '"></div>' +
+      '<div class="chart-box" data-mo-chart="' + bi + '"></div></div>';
+  }
+  var html = blockHtml(blocks[0], 0);
+  if(blocks.length > 1){
+    html += '<div class="markout-grid">';
+    blocks.forEach(function(b, bi){ if(bi > 0) html += blockHtml(b, bi); });
+    html += "</div>";
+  }
+  wrap.innerHTML = html;
+  blocks.forEach(function(b, bi){
+    var box = wrap.querySelector('[data-mo-chart="' + bi + '"]');
+    var ro = wrap.querySelector('[data-mo-readout="' + bi + '"]');
+    if(!box || !ro) return;
+    var blank = [
+      {k: "約定後の経過", v: ""},
+      {k: "マークアウト（円/BTC）", v: ""},
+      {k: "件数", v: ""}
+    ];
+    /* fixed band height matching the larger markout readout text
+       (12px label + 14px value, see CSS); set once, never changed by
+       hovering, so nothing below the band moves */
+    ro.style.height = "48px";
+    ro.innerHTML = readoutHtml(blank);
+    /* this series' own scale: zero included, 8% padding both sides */
+    var bVals = [];
+    HZ.forEach(function(hz){ var c = b.data[hz]; if(c && isNum(num(c.yen_per_btc, NaN))) bVals.push(num(c.yen_per_btc)); });
+    var vMin = Math.min(0, Math.min.apply(null, bVals.length ? bVals : [0])),
+        vMax = Math.max(0, Math.max.apply(null, bVals.length ? bVals : [0]));
+    if(vMin === vMax){ vMin -= 1; vMax += 1; }
+    var pad = (vMax - vMin) * 0.08; vMin -= pad; vMax += pad;
+    /* the small charts render in a half-width column: a narrower
+       viewBox keeps the axis text at body size on screen instead of
+       shrinking it with the chart */
+    var W = b.big ? 880 : 440, H = b.big ? 190 : 170, PL = b.big ? 64 : 58, PR = 10, PT = 10, PB = 28;
+    var FS = b.big ? 12 : 13;
+    var iw = W - PL - PR, ih = H - PT - PB;
+    function Y(v){ return PT + (vMax - v) / (vMax - vMin) * ih; }
+    var parts = ['<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="マークアウト棒グラフ（' + esc(b.label) + '）">'];
+    for(var ti = 0; ti <= 4; ti++){
+      var tv = vMin + (vMax - vMin) * ti / 4, y = Y(tv);
+      parts.push('<line class="grid" x1="' + PL + '" y1="' + y + '" x2="' + (W - PR) + '" y2="' + y + '" stroke-width="1" stroke-dasharray="3 3"/>');
+      parts.push('<text x="' + (PL - 6) + '" y="' + (y + FS - 8) + '" text-anchor="end" font-size="' + FS + '">' + esc(fmtYen(tv, 0)) + "</text>");
+    }
+    parts.push('<line class="zero" x1="' + PL + '" y1="' + Y(0) + '" x2="' + (W - PR) + '" y2="' + Y(0) + '" stroke-width="1.4"/>');
+    var groupW = iw / HZ.length;
+    var barW = groupW * 0.52;
+    HZ.forEach(function(hz, gi){
+      var c = b.data[hz];
+      if(c && isNum(num(c.yen_per_btc, NaN))){
+        var v = num(c.yen_per_btc);
+        var x = PL + groupW * gi + (groupW - barW) / 2;
+        var y0 = Y(0), y1 = Y(v);
+        parts.push('<rect class="mo-bar" x="' + x.toFixed(1) + '" y="' + Math.min(y0, y1).toFixed(1) + '" width="' + barW.toFixed(1) + '" height="' + Math.max(1, Math.abs(y1 - y0)).toFixed(1) + '" rx="2" style="fill:' + (v >= 0 ? "var(--gain)" : "var(--loss)") + '" data-hz="' + hz + '" data-v="' + v + '" data-count="' + num(c.count, NaN) + '"/>');
+      }
+      parts.push('<text x="' + (PL + groupW * gi + groupW / 2) + '" y="' + (H - 7) + '" text-anchor="middle" font-size="' + FS + '">' + hz + "秒後</text>");
+    });
+    parts.push("</svg>");
+    box.innerHTML = parts.join("");
+    var svg = box.querySelector("svg");
+    svg.addEventListener("pointermove", function(ev){
+      var t = ev.target;
+      if(t && t.classList && t.classList.contains("mo-bar")){
+        var v = parseFloat(t.getAttribute("data-v"));
+        var cnt = parseFloat(t.getAttribute("data-count"));
+        ro.innerHTML = readoutHtml([
+          {k: "約定後の経過", v: t.getAttribute("data-hz") + "秒後"},
+          {k: "マークアウト（円/BTC）", v: fmtSignedYen(v, 0) + " 円/BTC", cls: pnlClass(v)},
+          {k: "件数", v: isNum(cnt) ? fmtInt(cnt) + " 件" : ""}
+        ]);
+      } else {
+        ro.innerHTML = readoutHtml(blank);
+      }
+    });
+    svg.addEventListener("pointerleave", function(){ ro.innerHTML = readoutHtml(blank); });
+  });
+}
+
+function renderBreakdown(exp, cs, rows){
+  var slot = $("#breakdown-slot");
+  if(!slot) return;
+  var mine = rows.filter(function(x){ return x.name === cs.name; });
+  if(!mine.length){
+    /* fall back to results.json fill_match_summary */
+    mine = (cs.raw.fill_match_summary || []).map(function(x){
+      return { group_by: x.group_by, group_key: x.group_key, match_count: x.match_count, quantity: x.quantity, turnover: x.turnover, gross_realized_pnl: x.gross_realized_pnl, win_rate: x.win_rate };
+    });
+  }
+  if(!mine.length){ slot.innerHTML = '<p class="muted">このケースの内訳データがありません。</p>'; return; }
+  var groups = {};
+  mine.forEach(function(x){ (groups[x.group_by] = groups[x.group_by] || []).push(x); });
+  var keys = GROUP_ORDER.filter(function(k){ return groups[k]; });
+  Object.keys(groups).forEach(function(k){ if(keys.indexOf(k) < 0) keys.push(k); });
+  if(keys.indexOf(state.groupBy) < 0) state.groupBy = keys[0];
+  var h = '<div class="group-tabs" role="group" aria-label="内訳の切り口">';
+  keys.forEach(function(k){
+    h += '<button type="button" data-group="' + esc(k) + '" class="' + (state.groupBy === k ? "on" : "") + '">' + esc(GROUP_LABELS[k] || k) + "</button>";
+  });
+  h += "</div>";
+  var rowsG = groups[state.groupBy].slice();
+  if(state.groupBy === "holding_duration") rowsG.sort(function(a,b){ return holdingRank(a.group_key) - holdingRank(b.group_key); });
+  else if(state.groupBy === "entry_hour_jst" || state.groupBy === "exit_hour_jst") rowsG.sort(function(a,b){ return num(a.group_key) - num(b.group_key); });
+  else rowsG.sort(function(a,b){ return Math.abs(num(b.gross_realized_pnl)) - Math.abs(num(a.gross_realized_pnl)); });
+  var maxAbs = 0;
+  rowsG.forEach(function(x){ var a = Math.abs(num(x.gross_realized_pnl)); if(a > maxAbs) maxAbs = a; });
+  h += '<div class="bars">';
+  rowsG.forEach(function(x){
+    var v = num(x.gross_realized_pnl);
+    var w = maxAbs ? Math.max(1.5, Math.abs(v) / maxAbs * 100) : 0;
+    var keyLabel = (state.groupBy === "entry_hour_jst" || state.groupBy === "exit_hour_jst") ? x.group_key + "時" : x.group_key;
+    h += '<div class="bar-row"><span class="bar-key">' + esc(keyLabel) + '</span><span class="bar-track"><span class="bar-fill" style="left:0;width:' + w.toFixed(1) + '%;background:' + (v >= 0 ? "var(--gain)" : "var(--loss)") + '"></span></span><span class="num ' + pnlClass(v) + '">' + fmtYen(v, 0) + " 円</span></div>";
+  });
+  h += "</div>";
+  h += '<div class="table-wrap"><table><thead><tr><th>区分</th><th>件数</th><th>数量</th><th>売買代金（円）</th><th>実現損益（円）</th><th>勝率</th></tr></thead><tbody>';
+  rowsG.forEach(function(x){
+    var keyLabel = (state.groupBy === "entry_hour_jst" || state.groupBy === "exit_hour_jst") ? x.group_key + "時" : x.group_key;
+    h += "<tr><td>" + esc(keyLabel) + '</td><td class="num">' + fmtInt(num(x.match_count, NaN)) + '</td><td class="num">' + fmtNum(num(x.quantity, NaN), 4) + '</td><td class="num">' + fmtYen(num(x.turnover, NaN), 0) + "</td><td>" + pnlHtml(num(x.gross_realized_pnl, NaN), 0) + '</td><td class="num">' + (isNum(num(x.win_rate, NaN)) ? (num(x.win_rate)*100).toFixed(1) + "%" : "—") + "</td></tr>";
+  });
+  h += "</tbody></table></div>";
+  slot.innerHTML = h;
+  slot.querySelectorAll("[data-group]").forEach(function(b){
+    b.addEventListener("click", function(){ state.groupBy = b.getAttribute("data-group"); renderBreakdown(exp, cs, rows); });
+  });
+}
+
+/* ============ snapshot export ============ */
+function fmtSavedAt(ms){
+  if(!ms) return "—";
+  return new Date(ms).toLocaleString("ja-JP",{timeZone:"Asia/Tokyo", month:"long", day:"numeric", hour:"numeric", minute:"2-digit"});
+}
+/* Stream each distinct market file once for the union of the wanted
+   seconds of every experiment that references it (snapshot export). */
+async function loadPricesUnion(jobs){
+  var groups = new Map();
+  jobs.forEach(function(job){
+    var entry = marketEntry(job.exp);
+    if(!entry || !entry.getBlob) return;
+    var g = groups.get(entry);
+    if(!g){ g = {entry: entry, wanted: new Map()}; groups.set(entry, g); }
+    job.seconds.forEach(function(sec){
+      sec = Math.floor(sec);
+      var iso = new Date(sec * 1000).toISOString().slice(0, 19);
+      var arr = g.wanted.get(iso);
+      if(!arr){ arr = []; g.wanted.set(iso, arr); }
+      arr.push({exp: job.exp, sec: sec});
+    });
+  });
+  for(var g of groups.values()){
+    var found = new Map();
+    try {
+      await streamGzipLines(g.entry, function(line){
+        var m = line.slice(0, 42).match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+        if(!m || !g.wanted.has(m[0]) || found.has(m[0])) return;
+        var cm = line.match(/"close":\s*(-?[0-9][0-9.eE+-]*)/) || line.match(/"ltp":\s*(-?[0-9][0-9.eE+-]*)/);
+        if(cm){ var v = parseFloat(cm[1]); if(isFinite(v)) found.set(m[0], v); }
+      });
+    } catch(e){ /* whatever was collected stands */ }
+    g.wanted.forEach(function(targets, iso){
+      var v = found.get(iso);
+      if(!isNum(v)) return;
+      targets.forEach(function(t){
+        if(!t.exp._prices) t.exp._prices = new Map();
+        if(!t.exp._priceTried) t.exp._priceTried = new Set();
+        t.exp._prices.set(t.sec, v);
+        t.exp._priceTried.add(t.sec);
+      });
+    });
+  }
+}
+async function buildSnapshot(){
+  var jobs = [], out = [];
+  for(var ei = 0; ei < state.experiments.length; ei++){
+    var exp = state.experiments[ei];
+    setStatus("保存の準備中です…実験 " + (ei + 1) + " / " + state.experiments.length + " 件（" + esc(exp.name) + "）");
+    var matchRows = await loadMatchRows(exp);
+    var memo = await loadTextFile(exp, "memo");
+    var report = await loadTextFile(exp, "report");
+    var fillsByCase = {}, secs = [];
+    for(var ci = 0; ci < exp.cases.length; ci++){
+      var cs = exp.cases[ci];
+      (cs.raw.hourly_equity || []).forEach(function(p){ if(Array.isArray(p) && isNum(p[0])) secs.push(p[0]); });
+      var fills = await loadFills(exp, cs);
+      if(fills){
+        fillsByCase[cs.name] = fills.map(function(f){
+          return {t: f.t, side: f.side, size: f.size, price: f.price, kind: f.kind, realized_pnl: f.realized_pnl};
+        });
+        fills.forEach(function(f){ if(isNum(num(f.t, NaN))) secs.push(Math.floor(f.t)); });
+      }
+    }
+    jobs.push({exp: exp, seconds: secs});
+    out.push({exp: exp, matchRows: matchRows, memo: memo, report: report, fillsByCase: fillsByCase});
+  }
+  if(jobs.some(function(j){ return marketEntry(j.exp); })) setStatus("保存の準備中です…価格データを読み取り中です");
+  await loadPricesUnion(jobs);
+  return {
+    kind: "backtest-results-snapshot", version: 1,
+    savedAt: Date.now(), rootName: state.rootName,
+    trialCount: state.trialCount, broken: state.broken,
+    experiments: out.map(function(o){
+      var exp = o.exp, prices = [];
+      if(exp._prices) exp._prices.forEach(function(v, k){ prices.push([k, v]); });
+      return {
+        dir: exp.dir, name: exp.name, bot: exp.bot, product: exp.product,
+        startUtc: exp.startUtc, endUtc: exp.endUtc, model: exp.model,
+        latency: exp.latency === undefined ? null : exp.latency,
+        cancelLatency: exp.cancelLatency === undefined ? null : exp.cancelLatency,
+        mtime: exp.mtime, auditTotal: exp.auditTotal, auditPass: exp.auditPass,
+        cases: exp.cases.map(function(cs){ return {name: cs.name, label: cs.label, audit: cs.audit, raw: cs.raw}; }),
+        matchRows: o.matchRows, memoText: o.memo, reportText: o.report,
+        fillsByCase: o.fillsByCase, prices: prices
+      };
+    })
+  };
+}
+async function saveSnapshot(){
+  var btn = $("#btn-save");
+  if(!state.experiments.length || !APP_SOURCE || !MAIN_HTML) return;
+  btn.disabled = true;
+  try {
+    var data = await buildSnapshot();
+    setStatus("スナップショットを書き出し中です…");
+    var json = JSON.stringify(data).replace(/</g, "\\u003c");
+    var html = "<!doctype html>\n<html lang=\"ja\">\n<head>\n" + document.head.innerHTML + "\n</head>\n<body>\n" +
+      MAIN_HTML + "\n" +
+      '<script type="application/json" id="snapshot-data">' + json + "</scr" + "ipt>\n" +
+      "<script>\n" + APP_SOURCE + "\n</scr" + "ipt>\n</body>\n</html>\n";
+    var blob = new Blob([html], {type: "text/html;charset=utf-8"});
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    var d = new Date(data.savedAt);
+    function p(n){ return String(n).padStart(2, "0"); }
+    a.download = "backtest-results-snapshot-" + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "-" + p(d.getHours()) + p(d.getMinutes()) + ".html";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 400);
+    setStatus("スナップショットを保存しました（" + fmtSavedAt(data.savedAt) + "に保存）。保存したファイルを開くと、フォルダを選ばなくてもこの結果が見られます。");
+  } catch(e){
+    setStatus('<span class="err">スナップショットを書き出せませんでした。</span>');
+  } finally {
+    btn.disabled = !state.experiments.length;
+  }
+}
+
+/* ============ snapshot import (this file was exported with data) ============ */
+function initFromSnapshot(){
+  var el = document.getElementById("snapshot-data");
+  if(!el) return false;
+  var data = null;
+  try { data = JSON.parse(el.textContent); } catch(e){ return false; }
+  if(!data || data.kind !== "backtest-results-snapshot" || !Array.isArray(data.experiments)) return false;
+  state.snapshot = data;
+  state.rootName = data.rootName || "";
+  state.trialCount = data.trialCount || 0;
+  state.broken = data.broken || [];
+  state.lastLoaded = data.savedAt || 0;
+  state.experiments = data.experiments.map(function(se){
+    var cases = (se.cases || []).map(function(sc){
+      var cs = {raw: sc.raw, name: sc.name, label: sc.label, audit: sc.audit};
+      var fills = se.fillsByCase ? se.fillsByCase[sc.name] : null;
+      if(fills) cs._fills = fills;
+      return cs;
+    });
+    return {
+      dir: se.dir, name: se.name, bag: {}, raw: {}, cases: cases,
+      bot: se.bot, product: se.product, startUtc: se.startUtc, endUtc: se.endUtc,
+      model: se.model,
+      latency: se.latency === null ? undefined : se.latency,
+      cancelLatency: se.cancelLatency === null ? undefined : se.cancelLatency,
+      mtime: se.mtime, auditTotal: se.auditTotal, auditPass: se.auditPass,
+      best: cases[0] || null,
+      matchRows: se.matchRows || [], reportText: se.reportText, memoText: se.memoText,
+      _prices: new Map(se.prices || []),
+      _priceTried: new Set((se.prices || []).map(function(p){ return p[0]; })),
+      _marketEntry: null
+    };
+  });
+  var banner = $("#snapshot-banner");
+  banner.innerHTML = "<b>スナップショット</b>（" + esc(fmtSavedAt(data.savedAt)) + "に保存）を表示しています。フォルダは読み込んでいません。再読み込みはできません。新しい結果を見るには、元のファイルでフォルダを選び直してください。";
+  banner.hidden = false;
+  $("#btn-reload").disabled = true;
+  $("#btn-save").disabled = !state.experiments.length;
+  var chips = ['<span class="count-chip">実験 ' + state.experiments.length + " 件</span>"];
+  if(state.trialCount) chips.push('<span class="count-chip">trial を対象外 ' + state.trialCount + " 件</span>");
+  if(state.broken.length) chips.push('<span class="count-chip">読み取れなかった ' + state.broken.length + " 件</span>");
+  $("#counts").innerHTML = chips.join("");
+  $("#counts").hidden = false;
+  setStatus("スナップショット（" + fmtSavedAt(data.savedAt) + "に保存）を表示しています。選んだフォルダ：" + esc(state.rootName || "（スナップショット）"));
+  renderList("");
+  return true;
+}
+
+/* ============ wiring ============ */
+$("#btn-pick").addEventListener("click", pickFolder);
+$("#btn-pick-fallback").addEventListener("click", function(){ $("#dir-input").click(); });
+$("#btn-reload").addEventListener("click", reloadFolder);
+$("#btn-save").addEventListener("click", saveSnapshot);
+if(!window.showDirectoryPicker){
+  $("#btn-pick").textContent = "フォルダを選ぶ";
+  $("#btn-pick-fallback").textContent = "フォルダを選ぶ";
+}
+$("#dir-input").addEventListener("change", async function(ev){
+  var files = ev.target.files;
+  if(!files || !files.length) return;
+  var arr = Array.prototype.slice.call(files);
+  var first = arr[0].webkitRelativePath || "";
+  var rootName = first.split("/")[0] || "";
+  setStatus("フォルダを読み取り中です…");
+  state.dirHandle = null; state.fileList = arr;
+  await scan(collectFromFileList(arr), rootName);
+  ev.target.value = "";
+});
+if(!initFromSnapshot()) renderList("");
+</script>
+</body>
+</html>
