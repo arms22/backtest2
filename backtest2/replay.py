@@ -264,6 +264,9 @@ class ReplayEngine:
 
     def market_update(self, row):
         timestamp = row['timestamp']
+        after_gap = self.row is not None and row['second'] - self.row['second'] > self.interval_seconds
+        interval_start = (timestamp - self.interval_seconds
+                          if self.previous_time is None or after_gap else self.previous_time)
         trade_through = self.config.model == 'trade_through'
         trades_by_side = {'BUY': [], 'SELL': []}
         if trade_through:
@@ -283,12 +286,13 @@ class ReplayEngine:
                     if offset < 0:
                         earliest = timestamp + offset / 1000
                         latest = timestamp + (offset + 1) / 1000
+                        if after_gap and earliest < interval_start:
+                            continue
                         trades_by_side['BUY' if side == -1 else 'SELL'].append(
                             [earliest, latest, price, size])
                 for trades in trades_by_side.values():
                     trades.sort(key=lambda trade: trade[0])
         self.row = row
-        interval_start = self.previous_time if self.previous_time is not None else timestamp - self.interval_seconds
         # Each side has one shared aggregate budget, including overlapping orders.
         budget = {'BUY': row['sell_volume'], 'SELL': row['buy_volume']}
         # Only levels touched by taker fills need a private remaining size.

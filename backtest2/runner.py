@@ -17,7 +17,8 @@ from .analysis import (match_fills_fifo, summarize_matches, summarize_orders,
                        summarize_activity, summarize_position_activity)
 from .replay import ReplayEngine
 from .asyncio_support import sequential_asyncio
-from .data import file_hash, iso, iter_replay_rows as iter_market_rows, load_market_manifest, parse_time
+from .data import _ReplayBook, file_hash, iso, parse_time
+from .inputs import input_digest, iter_selected_rows, load_inputs, select_inputs
 
 @dataclass(frozen=True)
 class BotCase:
@@ -251,20 +252,36 @@ def _write_reports(output, results, start, end):
 
 
 async def run_backtest(data, output, cases, configs, experiment_file, start=None, end=None,
-                       split_at=(), progress=print, overwrite=False,
-                       data_file='market_rows.jsonl.gz', manifest_file='fetch_manifest.json'):
+                       split_at=(), progress=print, overwrite=False):
     """Fresh bot/inventory per segment; behavior and parameters come from each case."""
-    data, output = Path(data), Path(output)
-    manifest = load_market_manifest(data, data_file, manifest_file)
+    output = Path(output)
+    sources, manifest = load_inputs(data)
     start, end = _validate_run(manifest, start, end, split_at, cases, configs)
     interval_seconds = manifest['interval_seconds']
+    selected = select_inputs(sources, start, end)
+    if len(sources) > 1:
+        manifest['raw_sha256'] = input_digest(selected)
     hashes = source_hashes(cases, experiment_file)
-    protected = [data, data/data_file, data/manifest_file, Path.cwd(), Path(__file__).parent, experiment_file]
+    protected = [Path.cwd(), Path(__file__).parent, experiment_file]
+    for source in sources:
+        protected.extend((source['path'], source['manifest_path'], source['directory']))
     protected.extend(p for case in cases for p in case.code_files)
     prepare_output(output, overwrite, protected)
-    boundaries = [start, *split_at, end]
-    engines, midpoints, segment_index = [], [], -1
-    completed_runs = []
+    engines, midpoints, completed_runs = [], [], []
+    segments, gaps = [], []
+    splits = iter(split_at)
+    next_split = next(splits, end)
+    previous = None
+
+    def record_gap(left, right, action):
+        gaps.append(dict(start_utc=iso(left), end_utc_exclusive=iso(right),
+                         missing_bars=(right - left) // interval_seconds, action=action))
+
+    async def finish_segment(cutoff):
+        for engine, _ in engines:
+            engine.end = cutoff
+        await _finish_segment(engines, output, completed_runs)
+        segments.append(dict(start_utc=iso(segment_start), end_utc_exclusive=iso(cutoff)))
 
     with ExitStack() as contexts:
         contexts.enter_context(sequential_asyncio(
@@ -273,31 +290,45 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
         for case in cases:
             contexts.enter_context(case.clock_context())
         try:
-            for index, row in enumerate(iter_market_rows(data, start, end, data_file), 1):
+            for index, row in enumerate(iter_selected_rows(selected, book_decoder=_ReplayBook), 1):
                 second = row['second']
+                if (second - start) % interval_seconds or (previous is not None and second <= previous):
+                    raise ValueError(f'Market rows are out of order or off the replay grid at {iso(second)}')
                 midpoints.append((row['timestamp'], (row['bid'] + row['ask']) / 2))
-                while segment_index < 0 or second >= boundaries[segment_index + 1]:
+                expected = start if previous is None else previous + interval_seconds
+                restart = second - expected > interval_seconds or second >= next_split
+                if second > expected:
+                    action = 'outside' if previous is None else ('restart' if restart else 'continue')
+                    record_gap(expected, second, action)
+                if not engines or restart:
                     if engines:
-                        await _finish_segment(engines, output, completed_runs)
-                    segment_index += 1
+                        await finish_segment(expected)
+                    while second >= next_split:
+                        next_split = next(splits, end)
                     engines = []
+                    segment_start = second
                     for case in cases:
                         for config in configs:
                             name = f'{case.name}_{config.model}_{config.latency:g}s'
-                            engine = ReplayEngine(case.create_bot(), config, boundaries[segment_index],
-                                                  boundaries[segment_index + 1],
-                                                  f'segment_{segment_index + 1:03}', name,
+                            engine = ReplayEngine(case.create_bot(), config, segment_start,
+                                                  next_split, f'segment_{len(segments) + 1:03}', name,
                                                   case.strategy_factory, interval_seconds)
                             engines.append((engine, case))
                             await engine.launch()
                 for engine, case in engines:
                     await engine.tick(row)
+                previous = second
                 if (second + interval_seconds - start) % 3600 == 0:
                     progress(f'Replayed {iso(second+interval_seconds)} ({len(engines)} cases/models)')
                 if index % 256 == 0:
                     # Let the caller cancel a long run without yielding on every tick.
                     await asyncio.sleep(0)
-            await _finish_segment(engines, output, completed_runs)
+            if previous is None:
+                raise ValueError('No market rows in the requested period')
+            cutoff = previous + interval_seconds
+            if cutoff < end:
+                record_gap(cutoff, end, 'outside')
+            await finish_segment(cutoff)
         finally:
             await asyncio.gather(*(engine.stop() for engine, case in engines), return_exceptions=True)
 
@@ -317,8 +348,8 @@ async def run_backtest(data, output, cases, configs, experiment_file, start=None
     _write_reports(output, results, start, end)
     # Written last: its presence marks a successfully completed run.
     bundle = dict(input_manifest=manifest, input_raw_sha256=manifest['raw_sha256'],
-                  input_data_file=str(data_file), input_manifest_file=str(manifest_file),
+                  input_files=selected,
                   start_utc=iso(start), end_utc_exclusive=iso(end), split_at=[iso(t) for t in split_at],
-                  code_sha256=hashes, results=results)
+                  segments=segments, gaps=gaps, code_sha256=hashes, results=results)
     (output/'results.json').write_text(json.dumps(bundle, indent=2), encoding='utf-8')
     return bundle

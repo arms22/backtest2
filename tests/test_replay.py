@@ -108,6 +108,16 @@ class ReplayTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.tick(market(5))
         self.assertEqual(order['executed_size'], 0)
 
+    async def test_gap_does_not_extend_the_next_bars_execution_window(self):
+        self.engine.config = ReplayConfig(latency=0., cancel_latency=.5)
+        await self.engine.tick(market(1))
+        order = self.engine.submit_order('BUY', .004, 100.)
+        await self.engine.tick(market(2))
+        self.engine.cancel_order(order)
+        await self.engine.tick(market(4))
+        self.assertEqual(order['executed_size'], 0.)
+        self.assertEqual(order['state'], 'cancelled')
+
     async def test_trade_through_uses_only_eligible_trades_in_arrival_row(self):
         self.engine.config = ReplayConfig(model='trade_through')
         await self.engine.tick(market(1, timestamp=1., trades_raw='[]'))

@@ -9,23 +9,22 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .audit import liquidation_price
-from .data import iter_market_rows, load_market_manifest, parse_time
+from .data import parse_time
+from .inputs import iter_selected_rows, result_inputs, segment_ranges
 
 
 def load_pnl_series(data, results, cases=(), models=()):
     """Reconstruct bar-interval liquidation MTM, summing independent segments."""
-    data, results = Path(data), Path(results)
+    results = Path(results)
     bundle = json.loads((results/'results.json').read_text(encoding='utf-8'))
-    data_file = bundle.get('input_data_file', 'market_rows.jsonl.gz')
-    manifest = load_market_manifest(data, data_file, bundle.get('input_manifest_file', 'fetch_manifest.json'))
-    if manifest['raw_sha256'] != bundle['input_raw_sha256']:
-        raise ValueError('Market data differs from the backtest input')
+    inputs, interval_seconds = result_inputs(data, bundle)
     selected = [r for r in bundle['results'] if (not cases or r['case'] in cases)
                 and (not models or r['config']['model'] in models)]
     if not selected:
         raise ValueError('No results match the selected cases/models')
-    start, end = parse_time(bundle['start_utc']), parse_time(bundle['end_utc_exclusive'])
-    boundaries = [start, *map(parse_time, bundle['split_at']), end]
+    start = parse_time(bundle['start_utc'])
+    ranges = segment_ranges(bundle)
+    starts = [left for left, _ in ranges]
     curves, states = {}, {}
     for result in selected:
         name, segment = result['name'], result['segment']
@@ -36,9 +35,8 @@ def load_pnl_series(data, results, cases=(), models=()):
             fills = [json.loads(line) for line in source]
         states[segment, name] = dict(result=result, fills=fills, cursor=0, cash=0., sats=0)
 
-    interval_seconds = manifest['interval_seconds']
-    for row in iter_market_rows(data, start, end, data_file):
-        index = bisect.bisect_right(boundaries, row['second'])
+    for row in iter_selected_rows(inputs):
+        index = bisect.bisect_right(starts, row['second'])
         segment = f'segment_{index:03}'
         for name, curve in curves.items():
             state = states[segment, name]
@@ -55,13 +53,14 @@ def load_pnl_series(data, results, cases=(), models=()):
                                                        abs(quantity))
             curve['times'].append(row['timestamp'])
             curve['values'].append(curve['offset'] + equity)
-            if row['second'] + interval_seconds == boundaries[index]:
+            cutoff = ranges[index - 1][1]
+            if row['second'] + interval_seconds == cutoff:
                 expected = state['result']['gross_pnl']
                 if (state['cursor'] != len(fills) or state['sats'] != 0
                         or not math.isclose(equity, expected, abs_tol=1e-5)):
                     raise ValueError(f'Segment P&L or terminal position differs: {segment}/{name}')
                 curve['offset'] += expected
-                curve['times'].append(boundaries[index])
+                curve['times'].append(cutoff)
                 curve['values'].append(curve['offset'])
     return bundle, list(curves.values())
 
@@ -116,7 +115,8 @@ def plot_pnl(data, results, output=None, cases=(), models=(), utc_offset=0,
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--data', type=Path, required=True, help='Saved market-data directory')
+    parser.add_argument('--data', type=Path, nargs='+', required=True,
+                        help='One or more saved market-data directories')
     parser.add_argument('--results', type=Path, required=True, help='Completed backtest directory')
     parser.add_argument('--output', type=Path, help='Figure path; default: <results>/pnl.svg')
     parser.add_argument('--case', action='append', default=[], help='Case filter; repeatable')
