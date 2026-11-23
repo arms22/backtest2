@@ -10,7 +10,7 @@ from time import perf_counter
 from types import coroutine
 
 from .accounting import Position
-from .data import decode_market_json
+from .data import MarketRow
 
 ACTIVE = contextvars.ContextVar('backtest_engine')
 _NEXT_TICK = object()
@@ -126,8 +126,12 @@ class Executions:
         self.engine = engine
 
     async def get_data(self):
+        return self.from_counts(self.engine.row)
+
+    @staticmethod
+    def from_counts(row):
         return [{'side': side.upper()} for side in ('buy', 'sell')
-                if self.engine.row[side + '_count'] > 0]
+                if row[side + '_count'] > 0]
 
 
 class ReplayEngine:
@@ -263,6 +267,8 @@ class ReplayEngine:
             self.counts['fills_during_cancel'] += 1
 
     def market_update(self, row):
+        if not isinstance(row, MarketRow):
+            row = MarketRow(row)
         timestamp = row['timestamp']
         after_gap = self.row is not None and row['second'] - self.row['second'] > self.interval_seconds
         interval_start = (timestamp - self.interval_seconds
@@ -273,25 +279,18 @@ class ReplayEngine:
             raw = row.get('trades_raw')
             if not isinstance(raw, str):
                 raise ValueError('trade_through requires a trades_raw JSON array in every market row')
-            if raw != '[]':
-                trades = decode_market_json(raw)
-                if not isinstance(trades, list):
-                    raise ValueError('trades_raw must be a JSON array')
-                for offset, side, price, size in trades:
-                    if (type(offset) is not int or type(side) is not int or side not in (-1, 1)
-                            or not all(math.isfinite(value) and value > 0 for value in (price, size))):
-                        raise ValueError('Invalid trades_raw execution')
-                    # Offsets are floored. An offset of zero or later cannot
-                    # establish that the execution occurred before this row.
-                    if offset < 0:
-                        earliest = timestamp + offset / 1000
-                        latest = timestamp + (offset + 1) / 1000
-                        if after_gap and earliest < interval_start:
-                            continue
-                        trades_by_side['BUY' if side == -1 else 'SELL'].append(
-                            [earliest, latest, price, size])
-                for trades in trades_by_side.values():
-                    trades.sort(key=lambda trade: trade[0])
+            for offset, side, price, size in row.raw_trades:
+                # Offsets are floored. An offset of zero or later cannot
+                # establish that the execution occurred before this row.
+                if offset < 0:
+                    earliest = timestamp + offset / 1000
+                    latest = timestamp + (offset + 1) / 1000
+                    if after_gap and earliest < interval_start:
+                        continue
+                    trades_by_side['BUY' if side == -1 else 'SELL'].append(
+                        [earliest, latest, price, size])
+            for trades in trades_by_side.values():
+                trades.sort(key=lambda trade: trade[0])
         self.row = row
         # Each side has one shared aggregate budget, including overlapping orders.
         budget = {'BUY': row['sell_volume'], 'SELL': row['buy_volume']}

@@ -28,6 +28,25 @@ class MarketRow(dict):
         super().__init__(source)
         self.source = source
 
+    @cached_property
+    def raw_trades(self):
+        """Return validated trades in saved order, or None for a missing column."""
+        raw = self.get('trades_raw')
+        if raw is None:
+            return None
+        if not isinstance(raw, str):
+            raise ValueError('trades_raw must be a JSON array encoded as a string')
+        if raw == '[]':
+            return ()
+        trades = decode_market_json(raw)
+        if not isinstance(trades, list):
+            raise ValueError('trades_raw must be a JSON array')
+        for offset, side, price, size in trades:
+            if (type(offset) is not int or type(side) is not int or side not in (-1, 1)
+                    or not all(math.isfinite(value) and value > 0 for value in (price, size))):
+                raise ValueError('Invalid trades_raw execution')
+        return tuple(tuple(trade) for trade in trades)
+
 
 # Stored levels are flat [price, size] arrays. Leave uncommon layouts to the
 # regular decoder. The final comma proves there is a tail after level 20.
