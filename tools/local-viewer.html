@@ -207,7 +207,7 @@
 
   <div id="view"></div>
 
-  <footer>読むファイルは summary.csv / results.json / match_summary.csv / audit_checks.json / REPORT.md / README.md と、約定単位カーブのための約定台帳（*_fills.jsonl.gz）、価格表示のための市場データ（market_data の query_results.jsonl.gz）だけです。注文・約定突き合わせ台帳（*_orders.jsonl.gz / *_matches.jsonl.gz など）は読みません。名前に trial を含む実験は対象外です。</footer>
+  <footer>読むファイルは summary.csv / results.json / match_summary.csv / audit_checks.json / REPORT.md / README.md と、約定単位カーブのための約定台帳（*_fills.jsonl.gz）、価格表示のための市場データ（market_data の query_results.jsonl.gz）だけです。注文・約定突き合わせ台帳（*_orders.jsonl.gz / *_matches.jsonl.gz など）は読みません。実験フォルダ名に trial を含む結果と、選んだフォルダから結果フォルダまでの名前に smoke を含む結果は対象外です。</footer>
 </main>
 <script>
 "use strict";
@@ -349,7 +349,7 @@ function renderMarkdown(src){
 var WANTED = {"results.json":1, "summary.csv":1, "match_summary.csv":1, "audit_checks.json":1, "REPORT.md":1, "README.md":1, "query_results.jsonl.gz":1};
 function isWanted(name){ return !!WANTED[name] || /_fills\.jsonl\.gz$/.test(name); }
 var SKIP_DIRS = {".git":1, "node_modules":1, "__pycache__":1, ".space-build":1, ".hg":1, ".svn":1};
-var state = { rootName:"", files:null, experiments:[], trialCount:0, broken:[], current:null, currentCase:null, groupBy:"position_direction", sortKey:"gross_pnl", sortDir:-1, mdMode:{}, curveMode:"hourly",
+var state = { rootName:"", files:null, experiments:[], trialCount:0, smokeCount:0, broken:[], current:null, currentCase:null, groupBy:"position_direction", sortKey:"gross_pnl", sortDir:-1, mdMode:{}, curveMode:"hourly",
   dirHandle:null, fileList:null, lastLoaded:0, searchQuery:"", snapshot:null, chartPrefs:{}, overlayPrefs:{} };
 /* Source of this very script and of the static <main>, captured before
    anything renders: the snapshot export rebuilds a complete standalone
@@ -415,10 +415,11 @@ async function loadExperiments(files){
     if(!byDir.has(d)) byDir.set(d, {});
     byDir.get(d)[e.name] = e;
   });
-  var experiments = [], broken = [], trialCount = 0;
+  var experiments = [], broken = [], trialCount = 0, smokeCount = 0;
   for(var pair of byDir.entries()){
     var dir = pair[0], bag = pair[1];
     if(!bag["results.json"]) continue;
+    if(/smoke/i.test(state.rootName + "/" + dir)){ smokeCount++; continue; }
     var expName = baseOf(dir) || state.rootName;
     var isTrial = /trial/.test(expName);
     var rawText;
@@ -458,7 +459,7 @@ async function loadExperiments(files){
     });
   }
   experiments.sort(function(a,b){ return (b.mtime - a.mtime) || a.name.localeCompare(b.name); });
-  return { experiments: experiments, broken: broken, trialCount: trialCount };
+  return { experiments: experiments, broken: broken, trialCount: trialCount, smokeCount: smokeCount };
 }
 
 async function scan(files, rootName, opts){
@@ -476,12 +477,14 @@ async function scan(files, rootName, opts){
   await fillMtimes(files);
   var res = await loadExperiments(files);
   state.experiments = res.experiments; state.broken = res.broken; state.trialCount = res.trialCount;
+  state.smokeCount = res.smokeCount;
   state.lastLoaded = Date.now();
   $("#btn-reload").disabled = !(state.dirHandle || state.fileList);
   $("#btn-save").disabled = !state.experiments.length;
   var chips = [];
   chips.push('<span class="count-chip">実験 ' + res.experiments.length + " 件</span>");
   if(res.trialCount) chips.push('<span class="count-chip">trial を対象外 ' + res.trialCount + " 件</span>");
+  if(res.smokeCount) chips.push('<span class="count-chip">smoke を対象外 ' + res.smokeCount + " 件</span>");
   if(res.broken.length) chips.push('<span class="count-chip">読み取れなかった ' + res.broken.length + " 件</span>");
   $("#counts").innerHTML = chips.join("");
   $("#counts").hidden = false;
@@ -2094,7 +2097,7 @@ async function buildSnapshot(){
   return {
     kind: "backtest-results-snapshot", version: 1,
     savedAt: Date.now(), rootName: state.rootName,
-    trialCount: state.trialCount, broken: state.broken,
+    trialCount: state.trialCount, smokeCount: state.smokeCount, broken: state.broken,
     experiments: out.map(function(o){
       var exp = o.exp, prices = [];
       if(exp._prices) exp._prices.forEach(function(v, k){ prices.push([k, v]); });
@@ -2150,6 +2153,7 @@ function initFromSnapshot(){
   state.snapshot = data;
   state.rootName = data.rootName || "";
   state.trialCount = data.trialCount || 0;
+  state.smokeCount = data.smokeCount || 0;
   state.broken = data.broken || [];
   state.lastLoaded = data.savedAt || 0;
   state.experiments = data.experiments.map(function(se){
@@ -2180,6 +2184,7 @@ function initFromSnapshot(){
   $("#btn-save").disabled = !state.experiments.length;
   var chips = ['<span class="count-chip">実験 ' + state.experiments.length + " 件</span>"];
   if(state.trialCount) chips.push('<span class="count-chip">trial を対象外 ' + state.trialCount + " 件</span>");
+  if(state.smokeCount) chips.push('<span class="count-chip">smoke を対象外 ' + state.smokeCount + " 件</span>");
   if(state.broken.length) chips.push('<span class="count-chip">読み取れなかった ' + state.broken.length + " 件</span>");
   $("#counts").innerHTML = chips.join("");
   $("#counts").hidden = false;
