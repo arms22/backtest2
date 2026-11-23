@@ -57,6 +57,9 @@
   .exp-list{display:grid;gap:12px}
   .exp-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:14px 16px;text-align:left;width:100%;color:var(--ink)}
   .exp-card:hover{border-color:var(--accent)}
+  .compare-cases{padding:6px 16px;color:var(--muted)}
+  .compare-cases summary{cursor:pointer}
+  .compare-cases label{display:block;overflow-wrap:anywhere}
   .exp-head{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
   .exp-name{font-size:1.05rem;font-weight:700}
   .badge{background:var(--surface2);color:var(--ink);border-radius:6px;padding:1px 7px;font-size:.72rem;font-weight:600}
@@ -350,7 +353,7 @@ var WANTED = {"results.json":1, "summary.csv":1, "match_summary.csv":1, "audit_c
 function isWanted(name){ return !!WANTED[name] || /_fills\.jsonl\.gz$/.test(name); }
 var SKIP_DIRS = {".git":1, "node_modules":1, "__pycache__":1, ".space-build":1, ".hg":1, ".svn":1};
 var state = { rootName:"", files:null, experiments:[], trialCount:0, smokeCount:0, broken:[], current:null, currentCase:null, groupBy:"position_direction", sortKey:"gross_pnl", sortDir:-1, mdMode:{}, curveMode:"hourly",
-  dirHandle:null, fileList:null, lastLoaded:0, searchQuery:"", snapshot:null, chartPrefs:{}, overlayPrefs:{} };
+  dirHandle:null, fileList:null, lastLoaded:0, searchQuery:"", snapshot:null, chartPrefs:{}, overlayPrefs:{}, compareCases:new Map() };
 /* Source of this very script and of the static <main>, captured before
    anything renders: the snapshot export rebuilds a complete standalone
    file from these two pieces plus the embedded result data. */
@@ -477,6 +480,7 @@ async function scan(files, rootName, opts){
   await fillMtimes(files);
   var res = await loadExperiments(files);
   state.experiments = res.experiments; state.broken = res.broken; state.trialCount = res.trialCount;
+  state.compareCases.clear();
   state.smokeCount = res.smokeCount;
   state.lastLoaded = Date.now();
   $("#btn-reload").disabled = !(state.dirHandle || state.fileList);
@@ -1062,6 +1066,9 @@ function mountOverlayChart(box, readout, series, pricePts, view){
     }
     series.forEach(function(s){
       var drawn = strideRows(s.points.filter(function(p){ return p[0] >= vs && p[0] <= ve; }), 2600);
+      if(drawn.length === 1 && s.limitReadoutToPeriod){
+        parts.push('<circle cx="' + X(drawn[0][0]) + '" cy="' + Y(drawn[0][1]) + '" r="3" fill="' + s.color + '"/>');
+      }
       if(drawn.length < 2) return;
       var d = drawn.map(function(p, idx){ return (idx ? "L" : "M") + X(p[0]).toFixed(1) + " " + Y(p[1]).toFixed(1); }).join(" ");
       parts.push('<path d="' + d + '" fill="none" stroke="' + s.color + '" stroke-width="1.7"/>');
@@ -1096,8 +1103,10 @@ function mountOverlayChart(box, readout, series, pricePts, view){
       var cells = [{k: "時刻 (JST)", v: fmtEpochJST(t)}];
       series.forEach(function(s, si){
         var p = nearestPointByT(s.points, t);
+        if(s.limitReadoutToPeriod && (t < s.points[0][0] - 1 || t > s.points[s.points.length - 1][0] + 1)) p = null;
         var dot = dots[si];
         if(p && dot){ dot.setAttribute("cx", X(p[0])); dot.setAttribute("cy", Y(p[1])); dot.setAttribute("visibility", "visible"); }
+        else if(dot) dot.setAttribute("visibility", "hidden");
         cells.push({k: s.label, v: p ? fmtSignedYen(p[1], 0) + " 円" : "", cls: p ? pnlClass(p[1]) : "", color: s.color});
       });
       if(pricePts){
@@ -1201,6 +1210,36 @@ async function buildOverlayInterval(exp, baseSeries, intervalSec, fullStart, ful
 }
 
 /* ============ view: experiment list ============ */
+function hourlyEquity(cs){
+  return (Array.isArray(cs.raw.hourly_equity) ? cs.raw.hourly_equity : []).filter(function(p){
+    return Array.isArray(p) && isNum(p[0]) && isNum(p[1]);
+  });
+}
+
+function renderComparison(){
+  var start = Infinity, end = -Infinity;
+  var series = Array.from(state.compareCases, function(entry, i){
+    var cs = entry[0], exp = entry[1];
+    var points = hourlyEquity(cs).sort(function(a,b){ return a[0] - b[0]; });
+    start = Math.min(start, points[0][0]);
+    end = Math.max(end, points[points.length - 1][0]);
+    return {label: (exp.dir || ".") + " / " + cs.label + (cs.raw.segment ? "（" + cs.raw.segment + "）" : ""),
+      color: chartColor(i), points: points, limitReadoutToPeriod: true};
+  });
+  if(start === end){ start -= 60; end += 60; }
+  var view = $("#view");
+  view.innerHTML = '<button type="button" class="backlink" id="back-list">← 実験一覧へ戻る</button>' +
+    '<div class="section"><h2>フォルダをまたいだ損益比較</h2>' +
+    '<p class="small muted">保存済みの時間ごとの累積損益（円）を実際の日時（JST）で表示します。</p>' +
+    '<div class="readout" id="compare-readout"></div><div class="chart-box" id="compare-chart"></div>' +
+    '<div class="chart-legend">' + series.map(function(s){
+      return '<span><span class="dot" style="background:' + s.color + '"></span>' + esc(s.label) + '</span>';
+    }).join("") + '</div></div>';
+  $("#back-list").addEventListener("click", function(){ renderList(state.searchQuery); });
+  mountOverlayChart($("#compare-chart"), $("#compare-readout"), series, null, {start:start, end:end});
+  window.scrollTo(0, 0);
+}
+
 function renderList(query){
   state.current = null; state.currentCase = null;
   state.searchQuery = query || "";
@@ -1214,6 +1253,7 @@ function renderList(query){
   state.experiments.forEach(function(e){ if(e.mtime > maxMtime) maxMtime = e.mtime; });
   var h = "";
   h += '<div class="toolbar"><input type="search" id="search" placeholder="実験名・パス・ボット名・商品で検索" value="' + esc(query || "") + '" aria-label="実験を検索">';
+  if(state.experiments.length) h += '<button type="button" class="btn" id="compare-pnl">損益を比較</button>';
   if(state.lastLoaded) h += '<span class="small muted">最終読み込み: ' + esc(fmtMtime(state.lastLoaded)) + " JST</span>";
   h += "</div>";
   if(!state.experiments.length){
@@ -1224,6 +1264,7 @@ function renderList(query){
     h += '<div class="exp-list">';
     list.forEach(function(e){
       var idx = state.experiments.indexOf(e);
+      h += '<div>';
       h += '<button type="button" class="exp-card" data-exp="' + idx + '">';
       h += '<span class="exp-head"><span class="exp-name">' + esc(e.name) + "</span>";
       if(e.mtime && e.mtime === maxMtime) h += '<span class="badge">最新</span>';
@@ -1240,10 +1281,38 @@ function renderList(query){
       h += '<span class="exp-meta"><span><span class="k">期間</span>' + esc(fmtTsUTC(e.startUtc)) + " 〜 " + esc(fmtTsUTC(e.endUtc)) + '<br><span class="k"></span>' + esc(fmtTsJST(e.startUtc)) + " 〜 " + esc(fmtTsJST(e.endUtc)) + "</span>";
       h += '<span><span class="k">results.json 更新</span>' + esc(fmtMtime(e.mtime)) + " JST</span></span>";
       h += "</button>";
+      h += '<details class="compare-cases"' + (e.cases.some(function(cs){ return state.compareCases.has(cs); }) ? ' open' : '') + '>' +
+        '<summary>損益を比較するケース</summary>';
+      e.cases.forEach(function(cs, caseIdx){
+        var available = hourlyEquity(cs).length > 0;
+        h += '<label><input type="checkbox" data-compare-exp="' + idx + '" data-compare-case="' + caseIdx + '"' +
+          (state.compareCases.has(cs) ? ' checked' : '') + (available ? '' : ' disabled') + '> ' + esc(cs.label) +
+          (cs.raw.segment ? '（' + esc(cs.raw.segment) + '）' : '') + (available ? '' : '（時間ごとの損益データなし）') + '</label>';
+      });
+      h += '</details></div>';
     });
     h += "</div>";
   }
   view.innerHTML = h;
+  var compare = $("#compare-pnl");
+  if(compare){
+    function updateCompareButton(){
+      var count = state.compareCases.size;
+      compare.disabled = count < 2;
+      compare.textContent = "損益を比較（" + count + " 件選択）";
+    }
+    updateCompareButton();
+    compare.addEventListener("click", renderComparison);
+    view.querySelectorAll("[data-compare-case]").forEach(function(input){
+      input.addEventListener("change", function(){
+        var exp = state.experiments[Number(input.dataset.compareExp)];
+        var cs = exp.cases[Number(input.dataset.compareCase)];
+        if(input.checked) state.compareCases.set(cs, exp);
+        else state.compareCases.delete(cs);
+        updateCompareButton();
+      });
+    });
+  }
   var si = $("#search");
   if(si){
     si.addEventListener("input", function(){ renderList(si.value); var n = $("#search"); n.focus(); n.setSelectionRange(n.value.length, n.value.length); });
@@ -1465,7 +1534,7 @@ async function renderExperiment(exp){
     });
   });
   var series = exp.cases.map(function(cs, i){
-    var pts = (cs.raw.hourly_equity || []).filter(function(p){ return Array.isArray(p) && isNum(p[0]) && isNum(p[1]); });
+    var pts = hourlyEquity(cs);
     return { label: cs.label, color: chartColor(i), points: pts };
   }).filter(function(s){ return s.points.length > 1; });
   var oprefs = state.overlayPrefs[exp.dir] || (state.overlayPrefs[exp.dir] = {zoom: null});
