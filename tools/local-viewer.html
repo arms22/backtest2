@@ -962,7 +962,12 @@ function mountPanels(wrap, readout, rows, panelDefs, view, scrubCells, blankCell
         drawn.forEach(function(r){ if(isNum(r[ls.key])) cur.push(r); else if(cur.length){ segs.push(cur); cur = []; } });
         if(cur.length) segs.push(cur);
         segs.forEach(function(seg){
-          if(seg.length < 2 && !ls.step) return;
+          if(seg.length < 2 && !ls.step){
+            if(rows.length === 1){
+              parts.push('<circle cx="' + X(seg[0].t) + '" cy="' + Y(seg[0][ls.key]) + '" r="3" fill="' + ls.color + '"/>');
+            }
+            return;
+          }
           var d = ls.step ? stepPath(seg, ls.key) : linePath(seg, ls.key);
           if(ls.area){
             var y0 = Y(0).toFixed(1);
@@ -985,6 +990,7 @@ function mountPanels(wrap, readout, rows, panelDefs, view, scrubCells, blankCell
       var svg = box.querySelector("svg");
       svg.addEventListener("pointermove", onScrub);
       svg.addEventListener("pointerdown", onScrub);
+      if(opts.onPick) svg.addEventListener("click", onScrub);
       svg.addEventListener("pointerleave", onLeave);
     });
     showBlank();
@@ -997,6 +1003,10 @@ function mountPanels(wrap, readout, rows, panelDefs, view, scrubCells, blankCell
     var vs = api.view.start, ve = api.view.end;
     var t = vs + (x - PL) / (W - PL - PR) * (ve - vs);
     if(t < vs) t = vs; if(t > ve) t = ve;
+    if(ev.type === "click"){
+      if(x >= PL && x <= W - PR) opts.onPick(t);
+      return;
+    }
     var row = nearestRowByT(rows, t);
     if(!row) return;
     panelDefs.forEach(function(pd, pi){
@@ -1024,7 +1034,7 @@ function mountPanels(wrap, readout, rows, panelDefs, view, scrubCells, blankCell
 
 /* ============ experiment overlay chart (cases + price on right axis) ============ */
 /* series: [{label, color, points:[[t,v],...]}]; pricePts: [[t,v],...]|null */
-function mountOverlayChart(box, readout, series, pricePts, view){
+function mountOverlayChart(box, readout, series, pricePts, view, onPick){
   var W = 880, H = 260, PL = 64, PT = 10, PB = 24;
   var api = { view: view };
   var curBlank = [];
@@ -1049,7 +1059,7 @@ function mountOverlayChart(box, readout, series, pricePts, view){
     function X(t){ return PL + (t - vs) / span * iw; }
     function Y(v){ return PT + (vMax - v) / (vMax - vMin) * ih; }
     function YP(v){ return PT + (pMax - v) / (pMax - pMin) * ih; }
-    var parts = ['<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="損益カーブ（全ケース）">'];
+    var parts = ['<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="損益カーブ">'];
     for(var ti = 0; ti <= 4; ti++){
       var tv = vMin + (vMax - vMin) * ti / 4, y = Y(tv);
       parts.push('<line class="grid" x1="' + PL + '" y1="' + y + '" x2="' + (W - PR) + '" y2="' + y + '" stroke-width="1" stroke-dasharray="3 3"/>');
@@ -1100,6 +1110,10 @@ function mountOverlayChart(box, readout, series, pricePts, view){
       var x = (ev.clientX - rect.left) / rect.width * W;
       var t = vs + (x - PL) / iw * span;
       if(t < vs) t = vs; if(t > ve) t = ve;
+      if(ev.type === "click"){
+        if(x >= PL && x <= W - PR) onPick(t);
+        return;
+      }
       var cells = [{k: "時刻 (JST)", v: fmtEpochJST(t)}];
       series.forEach(function(s, si){
         var p = nearestPointByT(s.points, t);
@@ -1126,6 +1140,7 @@ function mountOverlayChart(box, readout, series, pricePts, view){
     }
     svg.addEventListener("pointermove", onMove);
     svg.addEventListener("pointerdown", onMove);
+    if(onPick) svg.addEventListener("click", onMove);
     svg.addEventListener("pointerleave", onLeave);
   }
   api.redraw = function(view){ api.view = view; draw(); };
@@ -1158,7 +1173,7 @@ function buildFillPoints(fills){
    case detail per-fill panel uses. Without market data the sampled
    value is the cumulative realized PnL instead; a case with no ledger
    keeps its 1-hour series. */
-var OVERLAY_INTERVALS = [ {label:"1分", sec:60}, {label:"5分", sec:300}, {label:"15分", sec:900}, {label:"1時間", sec:3600} ];
+var OVERLAY_INTERVALS = [{label:"約定", sec:0}, {label:"1分", sec:60}, {label:"5分", sec:300}, {label:"15分", sec:900}, {label:"1時間", sec:3600}];
 function overlayBucketTimes(fullStart, fullEnd, intervalSec){
   var times = [fullStart];
   var t = (Math.floor(fullStart / intervalSec) + 1) * intervalSec;
@@ -1166,7 +1181,39 @@ function overlayBucketTimes(fullStart, fullEnd, intervalSec){
   if(times[times.length - 1] !== fullEnd) times.push(fullEnd);
   return times;
 }
+function sampleFillEquity(fpts, times, priceMap, canMtm){
+  var fi = 0, fill, lastFillPrice = null, lastPrice = null;
+  return times.map(function(t){
+    while(fi < fpts.length && fpts[fi].t <= t){
+      fill = fpts[fi++];
+      if(isNum(fill.price)) lastFillPrice = fill.price;
+    }
+    if(!canMtm) return [t, fill ? fill.cum : 0];
+    var price = priceMap.get(Math.floor(t));
+    if(isNum(price)) lastPrice = price;
+    if(!fill) return [t, 0];
+    price = lastPrice === null ? lastFillPrice : lastPrice;
+    return [t, fill.pos === 0 ? fill.cash : isNum(price) ? fill.cash + fill.pos * price : fill.cum];
+  });
+}
 async function buildOverlayInterval(exp, baseSeries, intervalSec, fullStart, fullEnd){
+  if(intervalSec === 0 || !baseSeries.length){
+    var byCase = exp.cases.map(function(cs, i){
+      var points = hourlyEquity(cs).sort(function(a,b){ return a[0] - b[0]; });
+      return {exp:exp, cs:cs, series:{label:cs.label, color:chartColor(i), points:points}};
+    });
+    var sampled = await buildComparisonSeries(byCase, intervalSec);
+    var times = new Set();
+    sampled.forEach(function(s){
+      if(s.source === "hourly") return;
+      s.points.forEach(function(p){ times.add(p[0]); });
+    });
+    var pricePts = Array.from(times).sort(function(a,b){ return a - b; }).flatMap(function(t){
+      var price = exp._prices.get(Math.floor(t));
+      return isNum(price) ? [[t, price]] : [];
+    });
+    return {series:sampled, pricePts:pricePts};
+  }
   var times = overlayBucketTimes(fullStart, fullEnd, intervalSec);
   var priceMap = await loadPrices(exp, times);
   var canMtm = hasMarketData(exp);
@@ -1178,27 +1225,10 @@ async function buildOverlayInterval(exp, baseSeries, intervalSec, fullStart, ful
     var fills = await loadFills(exp, cs);
     if(!fills || !fills.length){
       var hp = baseByLabel[cs.label];
-      if(hp && hp.length > 1){ series.push({label: cs.label, color: chartColor(ci), points: hp}); fallbackCases.push(cs.label); }
+      if(hp && hp.length){ series.push({label: cs.label, color: chartColor(ci), points: hp}); fallbackCases.push(cs.label); }
       continue;
     }
-    var fpts = buildFillPoints(fills);
-    var fi = 0, pos = 0, cash = 0, cum = 0, lastFillPrice = null, lastPrice = null;
-    var pts = times.map(function(T){
-      while(fi < fpts.length && fpts[fi].t <= T){
-        pos = fpts[fi].pos; cash = fpts[fi].cash; cum = fpts[fi].cum;
-        if(isNum(fpts[fi].price)) lastFillPrice = fpts[fi].price;
-        fi++;
-      }
-      if(!canMtm) return [T, cum];
-      var mp = priceMap.get(Math.floor(T));
-      if(isNum(mp)) lastPrice = mp; else mp = lastPrice;
-      var v;
-      if(pos === 0) v = cash;
-      else if(isNum(mp)) v = cash + pos * mp;
-      else if(isNum(lastFillPrice)) v = cash + pos * lastFillPrice;
-      else v = cum;
-      return [T, v];
-    });
+    var pts = sampleFillEquity(buildFillPoints(fills), times, priceMap, canMtm);
     series.push({label: cs.label, color: chartColor(ci), points: pts});
   }
   var pricePts = [];
@@ -1216,28 +1246,231 @@ function hourlyEquity(cs){
   });
 }
 
+function startPointControls(){
+  return '<div class="toggle-tabs"><span class="grp-label">損益の開始点</span>' +
+    '<button type="button" data-pick-start aria-pressed="false" disabled>グラフから選ぶ</button>' +
+    '<button type="button" data-clear-start disabled>解除</button>' +
+    '<span class="small muted" data-start-status aria-live="polite"></span></div>';
+}
+
+function mountStartPointControls(view, onChange){
+  var pick = view.querySelector("[data-pick-start]");
+  var clear = view.querySelector("[data-clear-start]");
+  var status = view.querySelector("[data-start-status]");
+  var selecting = false;
+  var control = {start: null, setReady: setReady, pick: selectTime};
+  function update(){
+    pick.classList.toggle("on", selecting);
+    pick.setAttribute("aria-pressed", selecting);
+    clear.disabled = pick.disabled || (!selecting && control.start === null);
+    status.textContent = selecting ? "グラフ上の開始位置をクリックしてください。" :
+      control.start === null ? "" : fmtEpochJSTS(control.start) + " JST";
+  }
+  function setReady(ready){
+    pick.disabled = !ready;
+    update();
+  }
+  function selectTime(t){
+    if(!selecting || pick.disabled) return;
+    control.start = t;
+    selecting = false;
+    update();
+    onChange();
+  }
+  pick.addEventListener("click", function(){
+    selecting = !selecting;
+    update();
+  });
+  clear.addEventListener("click", function(){
+    selecting = false;
+    control.start = null;
+    update();
+    onChange();
+  });
+  return control;
+}
+
+function rebaseComparisonSeries(series, start){
+  if(start === null) return series;
+  return series.filter(function(s){ return s.points[s.points.length - 1][0] >= start; }).map(function(s){
+    var i = 0, pts = s.points;
+    while(i + 1 < pts.length && pts[i + 1][0] <= start) i++;
+    var baseline = pts[i][1];
+    var rebased = [[Math.max(start, pts[i][0]), 0]];
+    for(i++; i < pts.length; i++) rebased.push([pts[i][0], pts[i][1] - baseline]);
+    return Object.assign({}, s, {points: rebased});
+  });
+}
+
+function rebaseCaseRows(rows, start){
+  if(start === null) return rows;
+  var i = 0;
+  while(i + 1 < rows.length && rows[i + 1].t <= start) i++;
+  var base = rows[i];
+  var first = base.t === start ? Object.assign({}, base) : {t:start, pos:base.pos};
+  first.pnl = 0;
+  if(isNum(base.mtm)) first.mtm = 0;
+  return [first].concat(rows.slice(i + 1).map(function(row){
+    var result = Object.assign({}, row, {pnl:row.pnl - base.pnl});
+    if(isNum(row.mtm)) result.mtm = row.mtm - base.mtm;
+    return result;
+  }));
+}
+
+function equityChartSection(title){
+  return '<div class="section" data-equity-chart><h2>' + esc(title) + '</h2>' +
+    '<div class="toggle-tabs"><span class="grp-label">表示間隔</span>' +
+    OVERLAY_INTERVALS.map(function(iv){
+      return '<button type="button" data-ov-interval="' + iv.sec + '">' + iv.label + '</button>';
+    }).join("") + '</div>' +
+    startPointControls() +
+    '<div class="readout" data-readout="overlay"></div><div class="chart-box" data-chart="overlay"></div>' +
+    '<div data-range="overlay"></div><div class="chart-legend" data-ov-legend></div>' +
+    '<p class="small muted" data-ov-note aria-live="polite"></p></div>';
+}
+
+function mountEquityChart(section, prefs, loadSeries){
+  var ovBox = section.querySelector('[data-chart="overlay"]'), ovRo = section.querySelector('[data-readout="overlay"]'), ovRange = section.querySelector('[data-range="overlay"]');
+  var ovNote = section.querySelector("[data-ov-note]"), legend = section.querySelector("[data-ov-legend]");
+  var buttons = section.querySelectorAll("[data-ov-interval]");
+  var curSeries = [], pricePts = [], chart, raf = 0;
+  var origin = mountStartPointControls(section, function(){
+    prefs.zoom = null;
+    drawOverlay();
+  });
+
+  function drawOverlay(){
+    if(raf){ cancelAnimationFrame(raf); raf = 0; }
+    var plotted = rebaseComparisonSeries(curSeries, origin.start);
+    legend.innerHTML = plotted.map(function(s){
+      return '<span><span class="dot" style="background:' + s.color + '"></span>' + esc(s.label) + '</span>';
+    }).join("") + (pricePts.length && plotted.length ? '<span><span class="dot" style="background:' + PRICE_COLOR + '"></span>価格（右軸）</span>' : "");
+    if(!plotted.length){
+      chart = null;
+      ovBox.innerHTML = '<p class="muted">表示できる損益データがありません。</p>';
+      ovRo.innerHTML = "";
+      ovRange.innerHTML = "";
+      return;
+    }
+    var start = origin.start === null ? Infinity : origin.start, end = -Infinity;
+    plotted.forEach(function(s){
+      start = Math.min(start, s.points[0][0]);
+      end = Math.max(end, s.points[s.points.length - 1][0]);
+    });
+    var fullView = {start:start, end:end === start ? end + 1 : end};
+    var zoom = prefs.zoom;
+    if(zoom && (zoom.start < start || zoom.end > fullView.end)) zoom = null;
+    chart = mountOverlayChart(ovBox, ovRo, plotted, pricePts.length ? pricePts : null, zoom || fullView, function(t){
+      origin.pick(Math.min(end, t));
+    });
+    mountRangeControl(ovRange, {
+      fullStart: start, fullEnd: fullView.end,
+      overview: plotted,
+      zoom: zoom,
+      onChange: function(z){
+        prefs.zoom = z;
+        if(raf) return;
+        raf = requestAnimationFrame(function(){
+          raf = 0;
+          if(ovBox.isConnected && chart) chart.redraw(prefs.zoom || fullView);
+        });
+      }
+    });
+  }
+  async function applyInterval(sec){
+    buttons.forEach(function(button){
+      var selected = Number(button.dataset.ovInterval) === sec;
+      button.classList.toggle("on", selected);
+      button.setAttribute("aria-pressed", selected);
+      button.disabled = true;
+    });
+    origin.setReady(false);
+    if(raf){ cancelAnimationFrame(raf); raf = 0; }
+    ovBox.innerHTML = '<p class="muted">損益系列を読み取り中です…</p>';
+    ovRo.innerHTML = "";
+    ovRange.innerHTML = "";
+    legend.innerHTML = "";
+    ovNote.textContent = "";
+    try {
+      var data = await loadSeries(sec);
+      if(!ovBox.isConnected) return;
+      curSeries = data.series;
+      pricePts = data.pricePts || [];
+      ovNote.textContent = data.note;
+      drawOverlay();
+      origin.setReady(true);
+    } catch(e){
+      chart = null;
+      ovBox.innerHTML = '<p class="muted">損益系列を読み取れませんでした。表示間隔を選び直してください。</p>';
+    } finally {
+      buttons.forEach(function(button){ button.disabled = false; });
+    }
+  }
+  buttons.forEach(function(button){
+    button.addEventListener("click", function(){
+      prefs.interval = Number(button.dataset.ovInterval);
+      applyInterval(prefs.interval);
+    });
+  });
+  applyInterval(prefs.interval);
+}
+
 function renderComparison(){
-  var start = Infinity, end = -Infinity;
-  var series = Array.from(state.compareCases, function(entry, i){
+  var cases = Array.from(state.compareCases, function(entry, i){
     var cs = entry[0], exp = entry[1];
     var points = hourlyEquity(cs).sort(function(a,b){ return a[0] - b[0]; });
-    start = Math.min(start, points[0][0]);
-    end = Math.max(end, points[points.length - 1][0]);
-    return {label: (exp.dir || ".") + " / " + cs.label + (cs.raw.segment ? "（" + cs.raw.segment + "）" : ""),
-      color: chartColor(i), points: points, limitReadoutToPeriod: true};
+    return {cs: cs, exp: exp, series: {
+      label: (exp.dir || ".") + " / " + cs.label + (cs.raw.segment ? "（" + cs.raw.segment + "）" : ""),
+      color: chartColor(i), points: points, limitReadoutToPeriod: true}};
   });
-  if(start === end){ start -= 60; end += 60; }
   var view = $("#view");
   view.innerHTML = '<button type="button" class="backlink" id="back-list">← 実験一覧へ戻る</button>' +
-    '<div class="section"><h2>フォルダをまたいだ損益比較</h2>' +
-    '<p class="small muted">保存済みの時間ごとの累積損益（円）を実際の日時（JST）で表示します。</p>' +
-    '<div class="readout" id="compare-readout"></div><div class="chart-box" id="compare-chart"></div>' +
-    '<div class="chart-legend">' + series.map(function(s){
-      return '<span><span class="dot" style="background:' + s.color + '"></span>' + esc(s.label) + '</span>';
-    }).join("") + '</div></div>';
+    equityChartSection("フォルダをまたいだ損益比較");
   $("#back-list").addEventListener("click", function(){ renderList(state.searchQuery); });
-  mountOverlayChart($("#compare-chart"), $("#compare-readout"), series, null, {start:start, end:end});
+  mountEquityChart(view.querySelector("[data-equity-chart]"), {zoom:null, interval:0}, async function(sec){
+    var series = sec === 3600 ? cases.map(function(item){ return item.series; }) : await buildComparisonSeries(cases, sec);
+    return {series:series, note:sec === 3600 ?
+      "保存済みの1時間ごとの累積損益（円）を表示します。横軸はJSTです。" :
+      "横軸はJSTです。累計実現損益と1時間の保存値は凡例に明記します。"};
+  });
   window.scrollTo(0, 0);
+}
+
+async function buildComparisonSeries(cases, sec){
+  var secondsByExperiment = new Map();
+  var inputs = await Promise.all(cases.map(async function(item){
+    var fills = await loadFills(item.exp, item.cs);
+    if(!fills || !fills.length) return {item: item};
+    var fpts = buildFillPoints(fills);
+    var hourly = item.series.points;
+    var start = hourly.length ? Math.min(hourly[0][0], fpts[0].t) : fpts[0].t;
+    var end = hourly.length ? Math.max(hourly[hourly.length - 1][0], fpts[fpts.length - 1].t) : fpts[fpts.length - 1].t;
+    var times = sec ? overlayBucketTimes(start, end, sec) : fpts.map(function(p){ return p.t; });
+    if(!secondsByExperiment.has(item.exp)) secondsByExperiment.set(item.exp, new Set());
+    times.forEach(function(t){ secondsByExperiment.get(item.exp).add(Math.floor(t)); });
+    return {item: item, fpts: fpts, times: times};
+  }));
+  for(var entry of secondsByExperiment) await loadPrices(entry[0], entry[1]);
+  return inputs.filter(function(input){ return input.fpts || input.item.series.points.length; }).map(function(input){
+    var item = input.item;
+    var s = Object.assign({}, item.series);
+    if(!input.fpts){
+      s.source = "hourly";
+      s.label += "（1時間の保存値）";
+      return s;
+    }
+    var prices = item.exp._prices;
+    var canMtm = input.times.some(function(t){ return prices.has(Math.floor(t)); });
+    if(!canMtm) s.label += "（累計実現）";
+    s.points = sec ? sampleFillEquity(input.fpts, input.times, prices, canMtm) :
+      input.fpts.map(function(p){
+        var price = prices.get(Math.floor(p.t));
+        var mark = isNum(price) ? price : p.price;
+        var pnl = p.pos === 0 ? p.cash : isNum(mark) ? p.cash + p.pos * mark : p.cum;
+        return [p.t, canMtm ? pnl : p.cum];
+      });
+    return s;
+  });
 }
 
 function renderList(query){
@@ -1502,17 +1735,7 @@ async function renderExperiment(exp){
   });
   h += "</tbody></table></div><p class=\"small muted\">行を選ぶとケース詳細を開きます。見出しを選ぶと並べ替えます。</p></div>";
 
-  /* overlay equity chart */
-  h += '<div class="section"><h2>損益カーブ（全ケース）</h2>';
-  h += '<div class="toggle-tabs"><span class="grp-label">表示間隔</span>' +
-    OVERLAY_INTERVALS.map(function(iv){ return '<button type="button" data-ov-interval="' + iv.sec + '">' + iv.label + "</button>"; }).join("") +
-    '<span class="small muted" data-ov-price-note></span></div>';
-  h += '<div class="readout" data-readout="overlay"></div><div class="chart-box" data-chart="overlay"></div>';
-  h += '<div data-range="overlay"></div>';
-  h += '<div class="chart-legend">' + exp.cases.map(function(cs, i){
-    return '<span><span class="dot" style="background:' + chartColor(i) + '"></span>' + esc(cs.label) + "</span>";
-  }).join("") + '<span><span class="dot" style="background:' + PRICE_COLOR + '"></span>価格（右軸）</span></div>';
-  h += '<p class="small muted" data-ov-note>results.json の hourly_equity（時間ごとの累積損益、円）です。価格は market_data の1秒データの終値です。</p></div>';
+  h += equityChartSection("損益カーブ（全ケース）");
 
   h += '<div id="md-slot"><p class="muted">判断メモとレポートを読み取り中です…</p></div>';
   view.innerHTML = h;
@@ -1534,90 +1757,35 @@ async function renderExperiment(exp){
     });
   });
   var series = exp.cases.map(function(cs, i){
-    var pts = hourlyEquity(cs);
-    return { label: cs.label, color: chartColor(i), points: pts };
-  }).filter(function(s){ return s.points.length > 1; });
-  var oprefs = state.overlayPrefs[exp.dir] || (state.overlayPrefs[exp.dir] = {zoom: null});
-  if(oprefs.interval == null) oprefs.interval = 60;
-  var ovBox = $('[data-chart="overlay"]'), ovRo = $('[data-readout="overlay"]'), ovRange = $('[data-range="overlay"]');
-  var priceNote = view.querySelector("[data-ov-price-note]");
-  var ovNote = view.querySelector("[data-ov-note]");
-  var intervalBtns = view.querySelectorAll("[data-ov-interval]");
-  if(!series.length){
-    ovBox.innerHTML = '<p class="muted">hourly_equity がないため、カーブは表示できません。</p>';
-    intervalBtns.forEach(function(b){ b.disabled = true; });
-  } else {
-    (async function(){
-      var fullStart = Infinity, fullEnd = -Infinity, secs = [];
-      series.forEach(function(s){ s.points.forEach(function(p){ if(p[0] < fullStart) fullStart = p[0]; if(p[0] > fullEnd) fullEnd = p[0]; secs.push(p[0]); }); });
-      var priceMap = await loadPrices(exp, secs);
-      if(state.current !== exp) return;
-      var canPrice = hasMarketData(exp);
-      var hourlyPricePts = [];
-      if(canPrice){ secs.forEach(function(sec){ var v = priceMap.get(Math.floor(sec)); if(isNum(v)) hourlyPricePts.push([sec, v]); }); }
-      hourlyPricePts.sort(function(a, b){ return a[0] - b[0]; });
-      if(!canPrice && priceNote) priceNote.textContent = "価格は market_data を含むフォルダ（bitcoin 全体やリポジトリのフォルダ）を選んだときだけ表示できます。";
-      var chart = null, curPricePts = hourlyPricePts, buildToken = 0;
-      function noteFor(intervalSec, built){
-        if(!ovNote) return;
-        var txt;
-        if(intervalSec >= 3600){
-          txt = "results.json の hourly_equity（時間ごとの累積損益、円）です。価格は market_data の1秒データの終値です。";
-        } else if(built && built.realizedOnly){
-          txt = "market_data が無いため、約定台帳（*_fills.jsonl.gz）の累計実現損益を " + (intervalSec / 60) + "分ごとに取り直して表示しています（時価ではありません）。価格の線は出ません。";
-        } else {
-          txt = "約定台帳（*_fills.jsonl.gz）と market_data の価格から、" + (intervalSec / 60) + "分ごとに取り直した時価（清算MTM）の累積損益です。ケース詳細の約定単位の時価系列と同じ計算です。";
-        }
-        if(built && built.fallbackCases && built.fallbackCases.length){
-          txt += "約定台帳が無いケース（" + built.fallbackCases.join("、") + "）は1時間の系列のままです。";
-        }
-        ovNote.textContent = txt;
-      }
-      async function applyInterval(intervalSec){
-        var token = ++buildToken;
-        intervalBtns.forEach(function(b){
-          b.classList.toggle("on", Number(b.getAttribute("data-ov-interval")) === intervalSec);
-          b.disabled = true;
-        });
-        var curSeries = series, built = null;
-        if(intervalSec < 3600){
-          ovBox.innerHTML = '<p class="muted">約定台帳から ' + (intervalSec / 60) + "分ごとの系列を取り直しています…</p>";
-          built = await buildOverlayInterval(exp, series, intervalSec, fullStart, fullEnd);
-          if(token !== buildToken || state.current !== exp) return;
-          curSeries = built.series.length ? built.series : series;
-          curPricePts = built.pricePts;
-        } else {
-          curPricePts = hourlyPricePts;
-        }
-        var zoom = oprefs.zoom;
-        if(zoom && (zoom.start < fullStart || zoom.end > fullEnd)) zoom = null;
-        var view0 = zoom || {start: fullStart, end: fullEnd};
-        chart = mountOverlayChart(ovBox, ovRo, curSeries, canPrice ? curPricePts : null, view0);
-        var raf = 0;
-        mountRangeControl(ovRange, {
-          fullStart: fullStart, fullEnd: fullEnd,
-          overview: curSeries.map(function(s){ return {points: s.points, color: s.color}; }),
-          zoom: zoom,
-          onChange: function(z){
-            oprefs.zoom = z;
-            if(raf) return;
-            raf = requestAnimationFrame(function(){ raf = 0; if(state.current === exp && chart) chart.redraw(z || {start: fullStart, end: fullEnd}); });
-          }
-        });
-        noteFor(intervalSec, built);
-        intervalBtns.forEach(function(b){ b.disabled = false; });
-      }
-      intervalBtns.forEach(function(b){
-        b.addEventListener("click", function(){
-          var sec = Number(b.getAttribute("data-ov-interval"));
-          if(oprefs.interval === sec && chart) return;
-          oprefs.interval = sec;
-          applyInterval(sec);
-        });
+    var pts = hourlyEquity(cs).sort(function(a,b){ return a[0] - b[0]; });
+    return {label:cs.label, color:chartColor(i), points:pts, limitReadoutToPeriod:true};
+  }).filter(function(s){ return s.points.length; });
+  var prefs = state.overlayPrefs[exp.dir] || (state.overlayPrefs[exp.dir] = {zoom:null, interval:0});
+  var secs = series.flatMap(function(s){ return s.points.map(function(p){ return p[0]; }); });
+  var hourlyStart = Infinity, hourlyEnd = -Infinity;
+  secs.forEach(function(t){ hourlyStart = Math.min(hourlyStart, t); hourlyEnd = Math.max(hourlyEnd, t); });
+  mountEquityChart(view.querySelector("[data-equity-chart]"), prefs, async function(sec){
+    if(sec === 3600){
+      var prices = await loadPrices(exp, secs);
+      var pricePts = Array.from(new Set(secs)).sort(function(a,b){ return a - b; }).flatMap(function(t){
+        var price = prices.get(Math.floor(t));
+        return isNum(price) ? [[t, price]] : [];
       });
-      applyInterval(oprefs.interval);
-    })();
-  }
+      return {series:series, pricePts:pricePts, note:"保存済みの1時間ごとの累積損益（円）を表示します。横軸はJSTです。"};
+    }
+    var built = await buildOverlayInterval(exp, series, sec, hourlyStart, hourlyEnd);
+    var note = "横軸はJSTです。";
+    if(built.realizedOnly) note += "市場価格がないため累計実現損益を表示します。";
+    if(built.fallbackCases && built.fallbackCases.length){
+      note += "約定データを使えないケース（" + built.fallbackCases.join("、") + "）は1時間の保存値です。";
+    }
+    if(sec === 0 || !series.length) note += "累計実現損益と1時間の保存値は凡例に明記します。";
+    return {
+      series:built.series.map(function(s){ return Object.assign({}, s, {limitReadoutToPeriod:true}); }),
+      pricePts:built.pricePts,
+      note:note
+    };
+  });
 
   var memo = await loadTextFile(exp, "memo");
   var report = await loadTextFile(exp, "report");
@@ -1698,6 +1866,7 @@ async function renderCase(exp, cs){
 
   /* equity curve */
   h += '<div class="section"><h2>損益カーブ</h2>';
+  h += startPointControls();
   h += '<div data-curve-msg></div>';
   h += '<div class="readout" data-readout="case"></div>';
   h += '<div data-panels></div>';
@@ -1864,7 +2033,7 @@ async function renderCase(exp, cs){
           {k: "数量", v: isNum(row.size) ? fmtQty(row.size) + " BTC" : ""},
           {k: "約定価格", v: isNum(row.fillPrice) ? fmtInt(row.fillPrice) + " 円" : ""},
           {k: "種別", v: kindLabel(row.kind)},
-          {k: "この約定", v: fmtSignedYen(row.realized, 0) + " 円", cls: pnlClass(row.realized)},
+          {k: "この約定", v: isNum(row.realized) ? fmtSignedYen(row.realized, 0) + " 円" : "", cls: pnlClass(row.realized)},
           {k: "累計実現", v: fmtSignedYen(row.pnl, 0) + " 円", cls: pnlClass(row.pnl)},
           {k: "時価損益", v: fmtSignedYen(row.mtm, 0) + " 円", cls: pnlClass(row.mtm)},
           {k: "ポジション", v: (row.pos >= 0 ? "+" : "") + row.pos.toFixed(4) + " BTC"},
@@ -1908,22 +2077,39 @@ async function renderCase(exp, cs){
       };
     }
 
-    var fullStart = rows[0].t, fullEnd = rows[rows.length - 1].t;
-    var zoom = prefs.zoom;
-    if(zoom && (zoom.start < fullStart || zoom.end > fullEnd || zoom.end - zoom.start < 30)) zoom = null;
-    var view0 = zoom || {start: fullStart, end: fullEnd};
-    var panels = mountPanels(wrap, ro, rows, defs, view0, scrubCells, blankCells, {rows: isFills ? 3 : 1});
     var raf = 0;
-    mountRangeControl(rangeEl, {
-      fullStart: fullStart, fullEnd: fullEnd,
-      overview: [{points: rows.map(function(row){ return [row.t, isFills ? row.mtm : row.pnl]; }), color: chartColor(0)}],
-      zoom: zoom,
-      onChange: function(z){
-        prefs.zoom = z;
-        if(raf) return;
-        raf = requestAnimationFrame(function(){ raf = 0; if(state.currentCase === cs) panels.redraw(z || {start: fullStart, end: fullEnd}); });
-      }
+    var origin = mountStartPointControls(view, function(){
+      prefs.zoom = null;
+      drawPanels();
     });
+    function drawPanels(){
+      if(raf){ cancelAnimationFrame(raf); raf = 0; }
+      var plotted = rebaseCaseRows(rows, origin.start);
+      var fullStart = plotted[0].t, last = plotted[plotted.length - 1].t;
+      var fullEnd = last === fullStart ? last + 1 : last;
+      var fullView = {start:fullStart, end:fullEnd};
+      var zoom = prefs.zoom;
+      if(zoom && (zoom.start < fullStart || zoom.end > fullEnd || zoom.end - zoom.start < 30)) zoom = null;
+      var panels = mountPanels(wrap, ro, plotted, defs, zoom || fullView, scrubCells, blankCells, {
+        rows: isFills ? 3 : 1,
+        onPick: function(t){ origin.pick(Math.min(t, last)); }
+      });
+      mountRangeControl(rangeEl, {
+        fullStart: fullStart, fullEnd: fullEnd,
+        overview: [{points: plotted.map(function(row){ return [row.t, isFills ? row.mtm : row.pnl]; }), color: chartColor(0)}],
+        zoom: zoom,
+        onChange: function(z){
+          prefs.zoom = z;
+          if(raf) return;
+          raf = requestAnimationFrame(function(){
+            raf = 0;
+            if(state.currentCase === cs) panels.redraw(prefs.zoom || fullView);
+          });
+        }
+      });
+    }
+    drawPanels();
+    origin.setReady(true);
     if(note){
       if(isFills){
         var finalCum = fpts[fpts.length - 1].cum;
